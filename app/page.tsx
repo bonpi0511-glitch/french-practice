@@ -84,7 +84,22 @@ export default function FrenchPracticePage() {
     if (saved) setSourceText(saved);
     try {
       const savedBank = localStorage.getItem(BANK_STORAGE_KEY);
-      if (savedBank) setVocabBank(JSON.parse(savedBank));
+      if (savedBank) {
+        const parsed = JSON.parse(savedBank);
+        // 古いバージョンで保存されたデータに新しい項目（text / exercises など）が
+        // 無くてもクラッシュしないよう、読み込み時に補完する
+        const normalized: MaterialEntry[] = (Array.isArray(parsed) ? parsed : []).map((e: any) => ({
+          id: e?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          addedAt: e?.addedAt || new Date().toISOString(),
+          label: e?.label || "",
+          preview: e?.preview || "",
+          text: e?.text || e?.preview || "",
+          vocabulary: Array.isArray(e?.vocabulary) ? e.vocabulary : [],
+          grammarPoints: Array.isArray(e?.grammarPoints) ? e.grammarPoints : [],
+          exercises: Array.isArray(e?.exercises) ? e.exercises : [],
+        }));
+        setVocabBank(normalized);
+      }
     } catch {}
     setSpeechSupported(typeof window !== "undefined" && "speechSynthesis" in window);
     setMicSupported(
