@@ -36,7 +36,7 @@ type MaterialEntry = {
   exercises: ExerciseItem[];
 };
 
-type TopicMode = "single" | "random";
+type TopicMode = "single" | "random" | "pick";
 
 const LEVEL_OPTIONS: { value: Level; label: string }[] = [
   { value: "beginner", label: "初級（簡単な単語・短い文）" },
@@ -69,6 +69,7 @@ export default function FrenchPracticePage() {
   const [vocabBank, setVocabBank] = useState<MaterialEntry[]>([]);
   const [bankLoading, setBankLoading] = useState(false);
   const [topicMode, setTopicMode] = useState<TopicMode>("single");
+  const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
@@ -441,6 +442,14 @@ export default function FrenchPracticePage() {
       const pick = vocabBank[Math.floor(Math.random() * vocabBank.length)];
       return { text: pick.text, label: pick.label };
     }
+    if (topicMode === "pick") {
+      const picked = vocabBank.find((e) => e.id === selectedMaterialId);
+      if (!picked) {
+        alert("蓄積した教材の中から使うものを選んでください");
+        return null;
+      }
+      return { text: picked.text, label: picked.label };
+    }
     if (!sourceText.trim()) {
       alert("テキストを貼り付けるか、テキストファイルをアップロードしてください");
       return null;
@@ -448,10 +457,10 @@ export default function FrenchPracticePage() {
     return { text: sourceText, label: fileName || "手入力テキスト" };
   }
 
-  async function startConversation() {
-    const topic = pickTopicText();
+  async function startConversation(explicitTopic?: { text: string; label: string }) {
+    const topic = explicitTopic || pickTopicText();
     if (!topic) return;
-    if (topicMode === "single") localStorage.setItem(STORAGE_KEY, sourceText);
+    if (!explicitTopic && topicMode === "single") localStorage.setItem(STORAGE_KEY, sourceText);
     setActiveSourceText(topic.text);
     setActiveMaterialLabel(topic.label);
     setError("");
@@ -650,6 +659,33 @@ export default function FrenchPracticePage() {
               蓄積した教材からAIがランダムに選ぶ
               {vocabBank.length > 0 ? `（${vocabBank.length}件から）` : "（教材の蓄積が必要です）"}
             </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="topicMode"
+                checked={topicMode === "pick"}
+                onChange={() => setTopicMode("pick")}
+                disabled={vocabBank.length === 0}
+              />
+              蓄積した教材から選んで話す
+            </label>
+            {topicMode === "pick" && (
+              <select
+                className="input mt-1"
+                value={selectedMaterialId}
+                onChange={(e) => setSelectedMaterialId(e.target.value)}
+              >
+                <option value="">-- 教材を選択 --</option>
+                {vocabBank
+                  .slice()
+                  .reverse()
+                  .map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.label}（{formatDate(entry.addedAt)}）
+                    </option>
+                  ))}
+              </select>
+            )}
           </div>
         </div>
 
@@ -665,7 +701,7 @@ export default function FrenchPracticePage() {
         )}
 
         <div className="mt-4 flex flex-wrap gap-3">
-          <button className="btn btn-primary" disabled={loading || ocrLoading} onClick={startConversation}>
+          <button className="btn btn-primary" disabled={loading || ocrLoading} onClick={() => startConversation()}>
             {loading && !started ? "準備中..." : started ? "テキストを変えて再スタート" : "会話を始める"}
           </button>
           {started && (
@@ -687,7 +723,7 @@ export default function FrenchPracticePage() {
           <h2 className="text-xl font-bold">2. 会話練習</h2>
           {activeMaterialLabel && (
             <p className="mt-1 text-xs text-stone-500">
-              {topicMode === "random" ? "🎲 今回のお題: " : "📄 今回のお題: "}
+              {topicMode === "random" ? "🎲 今回のお題: " : topicMode === "pick" ? "📌 今回のお題: " : "📄 今回のお題: "}
               {activeMaterialLabel}
             </p>
           )}
@@ -787,12 +823,24 @@ export default function FrenchPracticePage() {
                         {formatDate(entry.addedAt)} ・ 語彙 {entry.vocabulary.length} 件
                       </div>
                     </div>
-                    <button
-                      className="shrink-0 text-xs text-red-600 underline"
-                      onClick={() => removeFromBank(entry.id)}
-                    >
-                      削除
-                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        className="text-xs text-[#1c2b4a] underline"
+                        onClick={() => {
+                          setTopicMode("pick");
+                          setSelectedMaterialId(entry.id);
+                          startConversation({ text: entry.text, label: entry.label });
+                        }}
+                      >
+                        この教材で話す
+                      </button>
+                      <button
+                        className="text-xs text-red-600 underline"
+                        onClick={() => removeFromBank(entry.id)}
+                      >
+                        削除
+                      </button>
+                    </div>
                   </div>
                   {entry.vocabulary.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
