@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const RequestBody = z.object({
-  text: z.string().min(1).max(8000),
+  text: z.string().min(1).max(20000),
 });
 
 const VocabItem = z.object({

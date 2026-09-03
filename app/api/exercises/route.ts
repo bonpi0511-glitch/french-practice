@@ -9,14 +9,14 @@ const RequestBody = z.object({
   text: z.string().min(1).max(20000),
 });
 
-const GrammarPoint = z.object({
-  title: z.string(),
+const ExerciseItem = z.object({
+  prompt: z.string(),
+  answer: z.string(),
   explanation_ja: z.string(),
-  examples: z.array(z.string()).max(5).default([]),
 });
 
 const Extraction = z.object({
-  grammarPoints: z.array(GrammarPoint).max(10).default([]),
+  exercises: z.array(ExerciseItem).max(30).default([]),
 });
 
 function getTextFromResponse(response: any): string {
@@ -42,16 +42,15 @@ export async function POST(req: NextRequest) {
     const body = RequestBody.parse(json);
     const client = new OpenAI({ apiKey });
 
-    const prompt = `以下はフランス語学習者がアップロードした教材テキストです（教科書の「Grammaire」欄などを含む場合があります）。
-このテキストに含まれる文法ポイント（名詞の性・数、冠詞、疑問文の作り方、量の表現など、教材中に明示的な文法解説がある場合はそれを優先して使う。無ければテキストの内容から重要な文法事項を最大5個推測して補ってもよい）を抽出し、日本語話者向けにやさしい日本語で解説してください。
+    const prompt = `以下はフランス語学習者がアップロードした教材テキストです。会話文・語彙・文法解説に加えて、教科書の練習問題欄（「Activités」など、穴埋め問題・正誤問題・選択問題・並べ替え問題・自由回答問題など）の設問がそのまま含まれている場合があります。
 
-各項目について:
-- title: 文法項目名（短く、例:「名詞の性と数」）
-- explanation_ja: 日本語でのわかりやすい解説（2〜4文程度）
-- examples: 教材中の例文があればそのまま2〜3個引用（フランス語のみ、日本語訳は不要）
+その設問部分を見つけ、1問ずつ以下の形式に整理してください:
+- prompt: 設問文そのもの（例:「1. ___ baguette」「Vrai ou faux ? La cliente achète du pain.」など、元の番号や空欄（___）も含めて）
+- answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に）
+- explanation_ja: なぜその答えになるか、日本語で短く（1〜2文）説明
 
-教材に明確な文法解説が見当たらない場合は grammarPoints を空配列にしてください。
-JSON のみで返してください: {"grammarPoints":[{"title":"","explanation_ja":"","examples":[]}]}
+設問が教材中に無い場合は exercises を空配列にしてください。設問ではない部分（会話文や語彙リストそのもの）は含めないでください。最大30問まで。
+JSON のみで返してください: {"exercises":[{"prompt":"","answer":"","explanation_ja":""}]}
 
 教材テキスト:
 """
@@ -68,6 +67,6 @@ ${body.text.slice(0, 6000)}
     const parsed = Extraction.parse(JSON.parse(text));
     return NextResponse.json(parsed);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Grammar extraction error" }, { status: 500 });
+    return NextResponse.json({ error: e.message || "Exercise extraction error" }, { status: 500 });
   }
 }

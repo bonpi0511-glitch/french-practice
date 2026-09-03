@@ -20,7 +20,7 @@ const HistoryItem = z.object({
 });
 
 const RequestBody = z.object({
-  sourceText: z.string().min(1).max(8000),
+  sourceText: z.string().min(1).max(20000),
   level: z.enum(LEVELS).default("beginner"),
   history: z.array(HistoryItem).max(30).default([]),
   userMessage: z.string().max(2000).optional(),
