@@ -17,7 +17,13 @@ type VocabPair = { fr: string; ja: string };
 
 type GrammarPoint = { title: string; explanation_ja: string; examples: string[] };
 
-type ExerciseItem = { prompt: string; answer: string; explanation_ja: string };
+type ExerciseItem = {
+  prompt: string;
+  answer: string;
+  explanation_ja: string;
+  qtype: "choice" | "text";
+  choices: string[];
+};
 
 type MaterialEntry = {
   id: string;
@@ -66,6 +72,8 @@ export default function FrenchPracticePage() {
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
+  const [exerciseAnswers, setExerciseAnswers] = useState<Record<string, string>>({});
+  const [checkedExercises, setCheckedExercises] = useState<Record<string, boolean>>({});
 
   // 音声関連
   const [autoSpeak, setAutoSpeak] = useState(true);
@@ -96,7 +104,13 @@ export default function FrenchPracticePage() {
           text: e?.text || e?.preview || "",
           vocabulary: Array.isArray(e?.vocabulary) ? e.vocabulary : [],
           grammarPoints: Array.isArray(e?.grammarPoints) ? e.grammarPoints : [],
-          exercises: Array.isArray(e?.exercises) ? e.exercises : [],
+          exercises: (Array.isArray(e?.exercises) ? e.exercises : []).map((ex: any) => ({
+            prompt: ex?.prompt || "",
+            answer: ex?.answer || "",
+            explanation_ja: ex?.explanation_ja || "",
+            qtype: ex?.qtype === "choice" ? "choice" : "text",
+            choices: Array.isArray(ex?.choices) ? ex.choices : [],
+          })),
         }));
         setVocabBank(normalized);
       }
@@ -225,6 +239,33 @@ export default function FrenchPracticePage() {
     });
   }
 
+  function setExerciseAnswer(key: string, value: string) {
+    // 回答を書き換えたら、それまでの採点結果は一旦引っ込める
+    setCheckedExercises((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setExerciseAnswers((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function checkExercise(key: string) {
+    setCheckedExercises((prev) => ({ ...prev, [key]: true }));
+  }
+
+  function normalizeAnswerText(s: string) {
+    return s
+      .trim()
+      .toLowerCase()
+      .replace(/[.,!?;:]+$/g, "")
+      .replace(/\s+/g, " ");
+  }
+
+  function isExerciseAnswerCorrect(key: string, correctAnswer: string) {
+    return normalizeAnswerText(exerciseAnswers[key] || "") === normalizeAnswerText(correctAnswer);
+  }
+
   function readFileAsText(file: File) {
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -304,15 +345,35 @@ export default function FrenchPracticePage() {
     if (imageFiles.length) {
       setOcrLoading(true);
       try {
-        const resized = await Promise.all(imageFiles.map((f) => resizeImageFile(f)));
+        const resized = await Promise.all(
+          imageFiles.map(async (f) => {
+            try {
+              return await resizeImageFile(f);
+            } catch {
+              return f;
+            }
+          })
+        );
         const fd = new FormData();
         resized.forEach((f) => fd.append("files", f));
         const res = await fetch("/api/ocr", { method: "POST", body: fd });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "画像からの文字起こしに失敗しました");
-        if (data.text) collected.push(data.text);
+        // まずテキストとして読み、JSONとして解釈できるか確認する。
+        // （Vercelのエラーページ(HTML)やゲートウェイのエラーがそのまま返ってくると
+        //   res.json() が謎のエラーになり原因が分からなくなるため、必ず内容を確認する）
+        const raw = await res.text();
+        let data: any = null;
+        try {
+          data = raw ? JSON.parse(raw) : null;
+        } catch {
+          const snippet = raw.slice(0, 200).replace(/\s+/g, " ").trim();
+          throw new Error(
+            `サーバーから予期しない応答がありました（status: ${res.status}）。内容: ${snippet || "(空)"}`
+          );
+        }
+        if (!res.ok) throw new Error(data?.error || `画像からの文字起こしに失敗しました（status: ${res.status}）`);
+        if (data?.text) collected.push(data.text);
       } catch (e: any) {
-        setOcrError(e.message);
+        setOcrError(e.message || String(e));
       } finally {
         setOcrLoading(false);
       }
@@ -784,31 +845,82 @@ export default function FrenchPracticePage() {
         <section className="card mt-4 p-5">
           <h2 className="text-xl font-bold">📝 設問（練習問題）</h2>
           <p className="mt-1 text-sm text-stone-600">
-            教材に含まれていた練習問題（穴埋め・正誤問題など）です。自分で考えてから「答えを見る」を押して確認しましょう。
+            教材に含まれていた練習問題（穴埋め・正誤問題など）です。回答してから「採点する」を押すか、「答えを見る」で正解を確認しましょう。
           </p>
 
           <div className="mt-3 space-y-3">
-            {accumulatedExercises.map(({ key, materialLabel, item }, i) => (
-              <div key={key} className="rounded-xl border border-stone-200 bg-white p-3">
-                <div className="text-[11px] text-stone-400">{materialLabel}</div>
-                <p className="mt-1 text-sm font-semibold text-stone-800">
-                  {i + 1}. {item.prompt}
-                </p>
-                {revealedExercises.has(key) ? (
-                  <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
-                    <div className="font-bold text-[#1c2b4a]">答え: {item.answer}</div>
-                    <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
+            {accumulatedExercises.map(({ key, materialLabel, item }, i) => {
+              const checked = !!checkedExercises[key];
+              const revealed = revealedExercises.has(key);
+              const correct = checked ? isExerciseAnswerCorrect(key, item.answer) : false;
+              return (
+                <div key={key} className="rounded-xl border border-stone-200 bg-white p-3">
+                  <div className="text-[11px] text-stone-400">{materialLabel}</div>
+                  <p className="mt-1 text-sm font-semibold text-stone-800">
+                    {i + 1}. {item.prompt}
+                  </p>
+
+                  <div className="mt-2 space-y-2">
+                    {item.qtype === "choice" && item.choices.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {item.choices.map((choice) => (
+                          <button
+                            key={choice}
+                            type="button"
+                            onClick={() => setExerciseAnswer(key, choice)}
+                            className={`rounded-lg border px-3 py-1.5 text-xs ${
+                              exerciseAnswers[key] === choice
+                                ? "border-[#1c2b4a] bg-[#1c2b4a] text-white"
+                                : "border-stone-300 bg-white text-stone-700"
+                            }`}
+                          >
+                            {choice}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={exerciseAnswers[key] || ""}
+                        onChange={(e) => setExerciseAnswer(key, e.target.value)}
+                        placeholder="回答を入力..."
+                        className="input w-full"
+                      />
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="btn btn-primary text-xs"
+                        disabled={!(exerciseAnswers[key] || "").trim()}
+                        onClick={() => checkExercise(key)}
+                      >
+                        採点する
+                      </button>
+                      <button className="btn btn-secondary text-xs" onClick={() => toggleExerciseAnswer(key)}>
+                        {revealed ? "答えを隠す" : "答えを見る"}
+                      </button>
+                    </div>
                   </div>
-                ) : (
-                  <button
-                    className="btn btn-secondary mt-2 text-xs"
-                    onClick={() => toggleExerciseAnswer(key)}
-                  >
-                    答えを見る
-                  </button>
-                )}
-              </div>
-            ))}
+
+                  {checked && (
+                    <div className={`mt-2 rounded-lg p-2 text-sm ${correct ? "bg-emerald-50" : "bg-rose-50"}`}>
+                      <div className={`font-bold ${correct ? "text-emerald-700" : "text-rose-700"}`}>
+                        {correct ? "✅ 正解！" : "❌ 不正解"}
+                      </div>
+                      <div className="mt-1 font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                      <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
+                    </div>
+                  )}
+
+                  {revealed && (
+                    <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
+                      <div className="font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                      <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
