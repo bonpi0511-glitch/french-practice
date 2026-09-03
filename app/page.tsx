@@ -234,6 +234,55 @@ export default function FrenchPracticePage() {
     });
   }
 
+  // スマホの写真はそのままだと数MBになり、アップロードに失敗することがあるため、
+  // 送信前に長辺2000px・JPEG圧縮にリサイズする（失敗時は元のファイルをそのまま使う）
+  function resizeImageFile(file: File, maxDim = 2000, quality = 0.85): Promise<File> {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new window.Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          URL.revokeObjectURL(url);
+          resolve(file);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            URL.revokeObjectURL(url);
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            const newName = file.name.replace(/\.\w+$/, "") + ".jpg";
+            resolve(new File([blob], newName, { type: "image/jpeg" }));
+          },
+          "image/jpeg",
+          quality
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      };
+      img.src = url;
+    });
+  }
+
   async function handleFiles(fileList: FileList | null) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
@@ -255,8 +304,9 @@ export default function FrenchPracticePage() {
     if (imageFiles.length) {
       setOcrLoading(true);
       try {
+        const resized = await Promise.all(imageFiles.map((f) => resizeImageFile(f)));
         const fd = new FormData();
-        imageFiles.forEach((f) => fd.append("files", f));
+        resized.forEach((f) => fd.append("files", f));
         const res = await fetch("/api/ocr", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "画像からの文字起こしに失敗しました");
