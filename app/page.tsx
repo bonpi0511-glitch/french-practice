@@ -17,14 +17,20 @@ type VocabPair = { fr: string; ja: string };
 
 type GrammarPoint = { title: string; explanation_ja: string; examples: string[] };
 
+type ExerciseItem = { prompt: string; answer: string; explanation_ja: string };
+
 type MaterialEntry = {
   id: string;
   addedAt: string;
   label: string;
   preview: string;
+  text: string;
   vocabulary: VocabPair[];
   grammarPoints: GrammarPoint[];
+  exercises: ExerciseItem[];
 };
+
+type TopicMode = "single" | "random";
 
 const LEVEL_OPTIONS: { value: Level; label: string }[] = [
   { value: "beginner", label: "初級（簡単な単語・短い文）" },
@@ -56,6 +62,21 @@ export default function FrenchPracticePage() {
   const [ocrError, setOcrError] = useState("");
   const [vocabBank, setVocabBank] = useState<MaterialEntry[]>([]);
   const [bankLoading, setBankLoading] = useState(false);
+  const [topicMode, setTopicMode] = useState<TopicMode>("single");
+  const [activeSourceText, setActiveSourceText] = useState("");
+  const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
+  const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
+
+  // 音声関連
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [micSupported, setMicSupported] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -65,6 +86,12 @@ export default function FrenchPracticePage() {
       const savedBank = localStorage.getItem(BANK_STORAGE_KEY);
       if (savedBank) setVocabBank(JSON.parse(savedBank));
     } catch {}
+    setSpeechSupported(typeof window !== "undefined" && "speechSynthesis" in window);
+    setMicSupported(
+      typeof window !== "undefined" &&
+        !!navigator.mediaDevices?.getUserMedia &&
+        typeof MediaRecorder !== "undefined"
+    );
   }, []);
 
   useEffect(() => {
@@ -76,38 +103,47 @@ export default function FrenchPracticePage() {
     localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(next));
   }
 
+  // 個別に呼び出し、失敗したものは空扱いにして他の結果は保存する
+  async function extractPart<T>(path: string, text: string, key: string, fallbackErrorLabel: string): Promise<{ data: T[]; error: string | null }> {
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || fallbackErrorLabel);
+      return { data: (data[key] as T[]) || [], error: null };
+    } catch (e: any) {
+      return { data: [], error: `${fallbackErrorLabel}: ${e.message}` };
+    }
+  }
+
   async function addToVocabBank(text: string, label: string) {
     if (!text.trim()) return;
     setBankLoading(true);
+    setOcrError("");
     try {
-      const [vocabRes, grammarRes] = await Promise.all([
-        fetch("/api/vocab", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        }),
-        fetch("/api/grammar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        }),
+      const [vocab, grammar, exercises] = await Promise.all([
+        extractPart<VocabPair>("/api/vocab", text, "vocabulary", "ボキャブラリー抽出に失敗しました"),
+        extractPart<GrammarPoint>("/api/grammar", text, "grammarPoints", "文法解説の抽出に失敗しました"),
+        extractPart<ExerciseItem>("/api/exercises", text, "exercises", "設問の抽出に失敗しました"),
       ]);
-      const vocabData = await vocabRes.json();
-      if (!vocabRes.ok) throw new Error(vocabData.error || "ボキャブラリー抽出に失敗しました");
-      const grammarData = await grammarRes.json();
-      if (!grammarRes.ok) throw new Error(grammarData.error || "文法解説の抽出に失敗しました");
 
       const entry: MaterialEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         addedAt: new Date().toISOString(),
         label,
         preview: text.trim().slice(0, 80),
-        vocabulary: vocabData.vocabulary || [],
-        grammarPoints: grammarData.grammarPoints || [],
+        text: text.trim().slice(0, 6000),
+        vocabulary: vocab.data,
+        grammarPoints: grammar.data,
+        exercises: exercises.data,
       };
       saveBank([...vocabBank, entry]);
-    } catch (e: any) {
-      setOcrError(e.message);
+
+      const errors = [vocab.error, grammar.error, exercises.error].filter(Boolean) as string[];
+      if (errors.length) setOcrError(`一部の情報は取得できませんでした（${errors.join(" / ")}）。教材自体はバンクに保存されています。`);
     } finally {
       setBankLoading(false);
     }
@@ -152,6 +188,27 @@ export default function FrenchPracticePage() {
     }
     return out.slice(0, 20);
   }, [vocabBank]);
+
+  // 教材ごとの設問を、新しいものから並べてまとめる（最大30問）
+  const accumulatedExercises = useMemo(() => {
+    const out: { key: string; materialLabel: string; item: ExerciseItem }[] = [];
+    for (let i = vocabBank.length - 1; i >= 0; i--) {
+      const entry = vocabBank[i];
+      entry.exercises.forEach((item, idx) => {
+        out.push({ key: `${entry.id}-${idx}`, materialLabel: entry.label, item });
+      });
+    }
+    return out.slice(0, 30);
+  }, [vocabBank]);
+
+  function toggleExerciseAnswer(key: string) {
+    setRevealedExercises((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function readFileAsText(file: File) {
     return new Promise<string>((resolve, reject) => {
@@ -214,12 +271,12 @@ export default function FrenchPracticePage() {
     );
   }
 
-  async function callChatApi(userMessage?: string) {
+  async function callChatApi(text: string, userMessage?: string) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sourceText,
+        sourceText: text,
         level,
         history: historyForApi(),
         userMessage,
@@ -237,19 +294,48 @@ export default function FrenchPracticePage() {
     };
   }
 
-  async function startConversation() {
+  // フランス語音声で読み上げる
+  function speakText(text: string) {
+    if (!text || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "fr-FR";
+    const voices = window.speechSynthesis.getVoices();
+    const frVoice = voices.find((v) => v.lang?.toLowerCase().startsWith("fr"));
+    if (frVoice) utter.voice = frVoice;
+    window.speechSynthesis.speak(utter);
+  }
+
+  function pickTopicText(): { text: string; label: string } | null {
+    if (topicMode === "random") {
+      if (!vocabBank.length) {
+        alert("ランダムモードを使うには、先に教材を1つ以上アップロード（またはボキャブラリーバンクに保存）してください");
+        return null;
+      }
+      const pick = vocabBank[Math.floor(Math.random() * vocabBank.length)];
+      return { text: pick.text, label: pick.label };
+    }
     if (!sourceText.trim()) {
       alert("テキストを貼り付けるか、テキストファイルをアップロードしてください");
-      return;
+      return null;
     }
-    localStorage.setItem(STORAGE_KEY, sourceText);
+    return { text: sourceText, label: fileName || "手入力テキスト" };
+  }
+
+  async function startConversation() {
+    const topic = pickTopicText();
+    if (!topic) return;
+    if (topicMode === "single") localStorage.setItem(STORAGE_KEY, sourceText);
+    setActiveSourceText(topic.text);
+    setActiveMaterialLabel(topic.label);
     setError("");
     setLoading(true);
     setMessages([]);
     setStarted(true);
     try {
-      const data = await callChatApi();
+      const data = await callChatApi(topic.text);
       setMessages([{ role: "assistant", french: data.reply, translation: data.reply_translation_ja }]);
+      if (autoSpeak) speakText(data.reply);
     } catch (e: any) {
       setError(e.message);
       setStarted(false);
@@ -267,7 +353,7 @@ export default function FrenchPracticePage() {
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
     try {
-      const data = await callChatApi(text);
+      const data = await callChatApi(activeSourceText, text);
       setMessages((prev) => {
         const next = [...prev];
         const lastIdx = next.length - 1;
@@ -284,6 +370,7 @@ export default function FrenchPracticePage() {
           { role: "assistant", french: data.reply, translation: data.reply_translation_ja },
         ];
       });
+      if (autoSpeak) speakText(data.reply);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -295,6 +382,56 @@ export default function FrenchPracticePage() {
     setMessages([]);
     setStarted(false);
     setError("");
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  }
+
+  async function startRecording() {
+    setVoiceError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || "audio/webm" });
+        await transcribeAudio(blob, mimeType || "audio/webm");
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecording(true);
+    } catch {
+      setVoiceError("マイクを使用できませんでした。ブラウザの設定でマイクへのアクセスを許可してください。");
+    }
+  }
+
+  function stopRecording() {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  }
+
+  async function transcribeAudio(blob: Blob, mimeType: string) {
+    setTranscribing(true);
+    try {
+      const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+      const fd = new FormData();
+      fd.append("audio", blob, `recording.${ext}`);
+      const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "音声の文字起こしに失敗しました");
+      setInput((prev) => (prev ? `${prev} ${data.text}`.trim() : data.text));
+    } catch (e: any) {
+      setVoiceError(e.message);
+    } finally {
+      setTranscribing(false);
+    }
   }
 
   return (
@@ -304,7 +441,7 @@ export default function FrenchPracticePage() {
         <h1 className="mt-2 text-3xl font-bold">フランス語 会話練習アプリ</h1>
         <p className="mt-2 text-stone-600">
           テキストをアップロード（または貼り付け）すると、その内容をもとにAIがフランス語で会話練習の相手をしてくれます。
-          アップロードした教材のボキャブラリー・文法解説は自動的に蓄積され、以後の会話でも復習として登場します。
+          マイクで話しかけたり、AIの返答を音声で聞くこともできます。
         </p>
       </section>
 
@@ -364,6 +501,43 @@ export default function FrenchPracticePage() {
           </p>
         </div>
 
+        <div className="mt-3">
+          <label className="text-sm font-semibold text-stone-600">会話のテーマ</label>
+          <div className="mt-1 flex flex-col gap-1 text-sm text-stone-700">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="topicMode"
+                checked={topicMode === "single"}
+                onChange={() => setTopicMode("single")}
+              />
+              このテキスト（上のテキスト欄の内容）で話す
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="topicMode"
+                checked={topicMode === "random"}
+                onChange={() => setTopicMode("random")}
+                disabled={vocabBank.length === 0}
+              />
+              蓄積した教材からAIがランダムに選ぶ
+              {vocabBank.length > 0 ? `（${vocabBank.length}件から）` : "（教材の蓄積が必要です）"}
+            </label>
+          </div>
+        </div>
+
+        {speechSupported && (
+          <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
+            <input
+              type="checkbox"
+              checked={autoSpeak}
+              onChange={(e) => setAutoSpeak(e.target.checked)}
+            />
+            🔊 AIの返答を自動で読み上げる
+          </label>
+        )}
+
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn btn-primary" disabled={loading || ocrLoading} onClick={startConversation}>
             {loading && !started ? "準備中..." : started ? "テキストを変えて再スタート" : "会話を始める"}
@@ -381,6 +555,88 @@ export default function FrenchPracticePage() {
           </div>
         )}
       </section>
+
+      {started && (
+        <section className="card mt-4 p-5">
+          <h2 className="text-xl font-bold">2. 会話練習</h2>
+          {activeMaterialLabel && (
+            <p className="mt-1 text-xs text-stone-500">
+              {topicMode === "random" ? "🎲 今回のお題: " : "📄 今回のお題: "}
+              {activeMaterialLabel}
+            </p>
+          )}
+
+          <div ref={scrollRef} className="mt-3 max-h-[520px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4">
+            {messages.map((m, i) =>
+              m.role === "assistant" ? (
+                <div key={i} className="flex flex-col items-start">
+                  <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-white border border-stone-200 px-4 py-2 text-sm">
+                    {m.french}
+                  </div>
+                  <div className="mt-1 flex max-w-[85%] items-center gap-2 text-xs text-stone-500">
+                    <span>{m.translation}</span>
+                    {speechSupported && (
+                      <button
+                        className="shrink-0 text-stone-400 hover:text-stone-600"
+                        onClick={() => speakText(m.french)}
+                        title="もう一度聞く"
+                      >
+                        🔊
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div key={i} className="flex flex-col items-end">
+                  <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
+                    {m.french}
+                  </div>
+                  {m.correction && (
+                    <div className="mt-1 max-w-[85%] rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                      <div className="font-bold">添削: {m.correction}</div>
+                      {m.correctionNote && <div className="mt-1">{m.correctionNote}</div>}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+            {loading && <div className="text-xs text-stone-400">相手が入力中...</div>}
+          </div>
+
+          {voiceError && (
+            <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              エラー: {voiceError}
+            </div>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            {micSupported && (
+              <button
+                type="button"
+                className={`btn shrink-0 ${recording ? "btn-danger" : "btn-secondary"}`}
+                disabled={loading || transcribing}
+                onClick={recording ? stopRecording : startRecording}
+                title={recording ? "録音を停止して文字起こし" : "マイクで話す"}
+              >
+                {recording ? "⏹ 停止" : transcribing ? "認識中..." : "🎤 話す"}
+              </button>
+            )}
+            <input
+              className="input flex-1"
+              placeholder="フランス語で返信してみましょう（マイクでも入力できます）"
+              value={input}
+              disabled={loading}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") sendMessage();
+              }}
+            />
+            <button className="btn btn-primary shrink-0" disabled={loading || !input.trim()} onClick={sendMessage}>
+              送信
+            </button>
+          </div>
+        </section>
+      )}
 
       {vocabBank.length > 0 && (
         <section className="card mt-4 p-5">
@@ -459,50 +715,35 @@ export default function FrenchPracticePage() {
         </section>
       )}
 
-      {started && (
+      {accumulatedExercises.length > 0 && (
         <section className="card mt-4 p-5">
-          <h2 className="text-xl font-bold">2. 会話練習</h2>
+          <h2 className="text-xl font-bold">📝 設問（練習問題）</h2>
+          <p className="mt-1 text-sm text-stone-600">
+            教材に含まれていた練習問題（穴埋め・正誤問題など）です。自分で考えてから「答えを見る」を押して確認しましょう。
+          </p>
 
-          <div ref={scrollRef} className="mt-3 max-h-[520px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4">
-            {messages.map((m, i) =>
-              m.role === "assistant" ? (
-                <div key={i} className="flex flex-col items-start">
-                  <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-white border border-stone-200 px-4 py-2 text-sm">
-                    {m.french}
+          <div className="mt-3 space-y-3">
+            {accumulatedExercises.map(({ key, materialLabel, item }, i) => (
+              <div key={key} className="rounded-xl border border-stone-200 bg-white p-3">
+                <div className="text-[11px] text-stone-400">{materialLabel}</div>
+                <p className="mt-1 text-sm font-semibold text-stone-800">
+                  {i + 1}. {item.prompt}
+                </p>
+                {revealedExercises.has(key) ? (
+                  <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
+                    <div className="font-bold text-[#1c2b4a]">答え: {item.answer}</div>
+                    <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
                   </div>
-                  <div className="mt-1 max-w-[85%] text-xs text-stone-500">{m.translation}</div>
-                </div>
-              ) : (
-                <div key={i} className="flex flex-col items-end">
-                  <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
-                    {m.french}
-                  </div>
-                  {m.correction && (
-                    <div className="mt-1 max-w-[85%] rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                      <div className="font-bold">添削: {m.correction}</div>
-                      {m.correctionNote && <div className="mt-1">{m.correctionNote}</div>}
-                    </div>
-                  )}
-                </div>
-              )
-            )}
-            {loading && <div className="text-xs text-stone-400">相手が入力中...</div>}
-          </div>
-
-          <div className="mt-3 flex gap-2">
-            <input
-              className="input flex-1"
-              placeholder="フランス語で返信してみましょう"
-              value={input}
-              disabled={loading}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendMessage();
-              }}
-            />
-            <button className="btn btn-primary" disabled={loading || !input.trim()} onClick={sendMessage}>
-              送信
-            </button>
+                ) : (
+                  <button
+                    className="btn btn-secondary mt-2 text-xs"
+                    onClick={() => toggleExerciseAnswer(key)}
+                  >
+                    答えを見る
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       )}
