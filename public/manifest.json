@@ -1,0 +1,27 @@
+{
+  "name": "フランス語 会話練習",
+  "short_name": "仏語会話練習",
+  "description": "教材をアップロードして、AIとフランス語の会話練習をするアプリ",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f8fb",
+  "theme_color": "#1c2b4a",
+  "lang": "ja",
+  "categories": ["education"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/maskable-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

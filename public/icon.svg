@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="96" fill="#1c2b4a"/>
+<text x="256" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="140" font-weight="700" fill="#ffffff">FR</text>
+<path d="M140 280h232a28 28 0 0 1 28 28v90a28 28 0 0 1-28 28H240l-56 46v-46h-44a28 28 0 0 1-28-28v-90a28 28 0 0 1 28-28z" fill="#ffffff"/>
+<circle cx="196" cy="352" r="10" fill="#1c2b4a"/>
+<circle cx="256" cy="352" r="10" fill="#1c2b4a"/>
+<circle cx="316" cy="352" r="10" fill="#1c2b4a"/>
+</svg>
