@@ -67,6 +67,12 @@ ${body.text.slice(0, 6000)}
     const parsed = Extraction.parse(JSON.parse(text));
     return NextResponse.json(parsed);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Exercise extraction error" }, { status: 500 });
+    const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
+    console.error("Exercise extraction error:", e?.message, detail);
+    const hasDetail = detail.status || detail.code || detail.param;
+    const message = hasDetail
+      ? (e.message || "Exercise extraction error") + " (status:" + (detail.status ?? "-") + " code:" + (detail.code ?? "-") + " param:" + (detail.param ?? "-") + ")"
+      : e.message || "Exercise extraction error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

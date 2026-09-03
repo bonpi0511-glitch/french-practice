@@ -30,6 +30,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ text: transcription.text || "" });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Transcription error" }, { status: 500 });
+    const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
+    console.error("Transcription error:", e?.message, detail);
+    const hasDetail = detail.status || detail.code || detail.param;
+    const message = hasDetail
+      ? (e.message || "Transcription error") + " (status:" + (detail.status ?? "-") + " code:" + (detail.code ?? "-") + " param:" + (detail.param ?? "-") + ")"
+      : e.message || "Transcription error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

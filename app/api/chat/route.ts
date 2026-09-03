@@ -116,6 +116,12 @@ JSON の形式:
     const parsed = ChatTurn.parse(JSON.parse(text));
     return NextResponse.json(parsed);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || "Chat error" }, { status: 500 });
+    const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
+    console.error("Chat error:", e?.message, detail);
+    const hasDetail = detail.status || detail.code || detail.param;
+    const message = hasDetail
+      ? (e.message || "Chat error") + " (status:" + (detail.status ?? "-") + " code:" + (detail.code ?? "-") + " param:" + (detail.param ?? "-") + ")"
+      : e.message || "Chat error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
