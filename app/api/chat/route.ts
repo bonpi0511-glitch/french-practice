@@ -123,7 +123,7 @@ JSON の形式:
         : "";
 
     const userContent = [
-      `教材テキスト:\n"""\n${body.sourceText.slice(0, 6000)}\n"""${vocabSection}${grammarSection}${roleLabelSection}`,
+      `教材テキスト:\n"""\n${body.sourceText.slice(0, 20000)}\n"""${vocabSection}${grammarSection}${roleLabelSection}`,
       body.userMessage
         ? `ユーザーの直近の発言（フランス語）: "${body.userMessage}"`
         : "これは会話の最初のターンです。教材テキスト中の会話文をそのまま一字一句コピーして reply に入れてください（新しく文章を作らないこと）。",

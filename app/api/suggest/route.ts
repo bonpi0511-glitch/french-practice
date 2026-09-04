@@ -79,7 +79,7 @@ ${
 JSON の形式:
 {"suggestion_fr":"","suggestion_ja":""}`;
 
-    const userContent = `教材テキスト:\n"""\n${body.sourceText.slice(0, 6000)}\n"""${roleSection}`;
+    const userContent = `教材テキスト:\n"""\n${body.sourceText.slice(0, 20000)}\n"""${roleSection}`;
 
     const history = body.history.slice(-16).map((h) => ({
       role: h.role,

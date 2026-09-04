@@ -218,7 +218,7 @@ export default function FrenchPracticePage() {
         addedAt: new Date().toISOString(),
         label,
         preview: text.trim().slice(0, 80),
-        text: text.trim().slice(0, 6000),
+        text: text.trim().slice(0, 20000),
         vocabulary: vocab.data,
         grammarPoints: grammar.data,
         exercises: exercises.data,

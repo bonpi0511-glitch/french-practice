@@ -48,7 +48,7 @@ JSON のみで返してください: {"vocabulary":[{"fr":"mot ou expression","j
 
 教材テキスト:
 """
-${body.text.slice(0, 6000)}
+${body.text.slice(0, 20000)}
 """`;
 
     const response = await client.responses.create({

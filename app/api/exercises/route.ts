@@ -67,7 +67,7 @@ JSON のみで返してください: {"exercises":[{"prompt":"","answer":"","exp
 
 教材テキスト:
 """
-${body.text.slice(0, 6000)}
+${body.text.slice(0, 20000)}
 """`;
 
     const response = await client.responses.create({
