@@ -94,6 +94,8 @@ export default function FrenchPracticePage() {
   const [beginnerMode, setBeginnerMode] = useState(false);
   const [suggestion, setSuggestion] = useState<{ fr: string; ja: string } | null>(null);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
+  // 初心者モードで、教材の会話文を最後まで使い終えた（AIがそれ以上アレンジしない）状態
+  const [conversationFinished, setConversationFinished] = useState(false);
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
   const [exerciseAnswers, setExerciseAnswers] = useState<Record<string, string>>({});
   const [checkedExercises, setCheckedExercises] = useState<Record<string, boolean>>({});
@@ -148,7 +150,7 @@ export default function FrenchPracticePage() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading, input, suggestion]);
+  }, [messages, loading, input, suggestion, conversationFinished]);
 
   function saveBank(next: MaterialEntry[]) {
     setVocabBank(next);
@@ -467,6 +469,7 @@ export default function FrenchPracticePage() {
         roleSwapped,
         aiRoleLabel,
         userRoleLabel,
+        beginnerMode,
       }),
     });
     const data = await res.json();
@@ -478,6 +481,7 @@ export default function FrenchPracticePage() {
       correction_note_ja: string | null;
       ai_role_label: string;
       user_role_label: string;
+      is_finished: boolean;
     };
   }
 
@@ -528,6 +532,7 @@ export default function FrenchPracticePage() {
     setAiRoleLabel("");
     setUserRoleLabel("");
     setSuggestion(null);
+    setConversationFinished(false);
     setStarted(true);
     if (roleSwapped) {
       // 役割交代モード：AIからは話しかけず、ユーザーの最初の発言を待つ
@@ -540,12 +545,15 @@ export default function FrenchPracticePage() {
       setMessages([{ role: "assistant", french: data.reply, translation: data.reply_translation_ja }]);
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
+      setConversationFinished(!!data.is_finished);
       if (autoSpeak) speakText(data.reply);
-      fetchSuggestion(
-        topic.text,
-        [{ role: "assistant", content: data.reply }],
-        { ai: data.ai_role_label || "", user: data.user_role_label || "" }
-      );
+      if (!data.is_finished) {
+        fetchSuggestion(
+          topic.text,
+          [{ role: "assistant", content: data.reply }],
+          { ai: data.ai_role_label || "", user: data.user_role_label || "" }
+        );
+      }
     } catch (e: any) {
       setError(e.message);
       setStarted(false);
@@ -584,12 +592,15 @@ export default function FrenchPracticePage() {
       });
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
+      setConversationFinished(!!data.is_finished);
       if (autoSpeak) speakText(data.reply);
-      fetchSuggestion(
-        activeSourceText,
-        [...priorHistory, { role: "user", content: text }, { role: "assistant", content: data.reply }],
-        { ai: data.ai_role_label || "", user: data.user_role_label || "" }
-      );
+      if (!data.is_finished) {
+        fetchSuggestion(
+          activeSourceText,
+          [...priorHistory, { role: "user", content: text }, { role: "assistant", content: data.reply }],
+          { ai: data.ai_role_label || "", user: data.user_role_label || "" }
+        );
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -604,6 +615,7 @@ export default function FrenchPracticePage() {
     setAiRoleLabel("");
     setUserRoleLabel("");
     setSuggestion(null);
+    setConversationFinished(false);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   }
 
@@ -943,6 +955,11 @@ export default function FrenchPracticePage() {
               </div>
             )}
             {loading && <div className="text-xs text-stone-400">相手が入力中...</div>}
+            {conversationFinished && (
+              <div className="rounded-xl border border-dashed border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800">
+                🎉 教材の会話はここまでです。AIはこれ以上、新しいセリフを作りません。別の教材で続けたい場合は「テキストを変えて再スタート」を使ってください。
+              </div>
+            )}
           </div>
 
           {voiceError && (

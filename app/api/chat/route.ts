@@ -29,6 +29,7 @@ const RequestBody = z.object({
   roleSwapped: z.boolean().default(false),
   aiRoleLabel: z.string().max(80).optional(),
   userRoleLabel: z.string().max(80).optional(),
+  beginnerMode: z.boolean().default(false),
 });
 
 const ChatTurn = z.object({
@@ -38,6 +39,7 @@ const ChatTurn = z.object({
   correction_note_ja: z.string().nullable().default(null),
   ai_role_label: z.string().default(""),
   user_role_label: z.string().default(""),
+  is_finished: z.boolean().default(false),
 });
 
 function getTextFromResponse(response: any): string {
@@ -84,9 +86,18 @@ export async function POST(req: NextRequest) {
 - ai_role_label には、あなたが演じているキャラクターを表す短いラベルを入れる。教材の会話文に話者表記（例:「L'employé」「La cliente」「Monsieur」など）があればそれをそのまま使う。無ければ会話の内容から適切な短いフランス語のラベルを考える（例:「Le vendeur」「La touriste」など）。
 - user_role_label には、ユーザーが演じているもう一方のキャラクターの同様のラベルを入れる。
 - ai_role_label と user_role_label は、会話が続く間は毎回同じ表記に統一すること（前のターンで使ったラベルがあれば、それと完全に同じ文字列を使う）。
+${
+  body.beginnerMode
+    ? `- 初心者モードです。以下を厳守してください:
+  - あなたの reply は、教材テキストの会話文（Dialogue）の中の、まだ「これまでの会話」で使っていない次のセリフを一字一句そのまま使うこと。言い換え・アレンジ・要約・新しい文の作成は一切禁止。教材の原文をそのままコピーする。
+  - 「これまでの会話」に既に登場した文（あなた自身の発言も含む）と同じ文を絶対に繰り返さないこと。
+  - 教材の会話文をすべて使い終えた場合、新しいセリフを作らず reply には代わりに会話が終わったことを伝える短いフランス語の一言（例:「Merci beaucoup, c'est tout pour aujourd'hui !」）を入れ、reply_translation_ja にその日本語訳を入れる。この場合 is_finished を true にする。
+  - それ以外の場合（まだ教材のセリフが残っている場合）は is_finished を false にする。`
+    : `- is_finished は常に false にする（このモードでは会話を打ち切らない）。`
+}
 
 JSON の形式:
-{"reply":"","reply_translation_ja":"","correction_fr":null,"correction_note_ja":null,"ai_role_label":"","user_role_label":""}`;
+{"reply":"","reply_translation_ja":"","correction_fr":null,"correction_note_ja":null,"ai_role_label":"","user_role_label":"","is_finished":false}`;
 
     const vocabSection = body.vocabularyBank.length
       ? `\n\nこれまで学習した語彙（復習用、過去にアップロードした教材から蓄積）:\n${body.vocabularyBank
