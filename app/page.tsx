@@ -300,7 +300,7 @@ export default function FrenchPracticePage() {
 
   // スマホの写真はそのままだと数MBになり、アップロードに失敗することがあるため、
   // 送信前に長辺2000px・JPEG圧縮にリサイズする（失敗時は元のファイルをそのまま使う）
-  function resizeImageFile(file: File, maxDim = 2000, quality = 0.85): Promise<File> {
+  function resizeImageFile(file: File, maxDim = 2600, quality = 0.92): Promise<File> {
     return new Promise((resolve) => {
       const url = URL.createObjectURL(file);
       const img = new window.Image();
@@ -671,6 +671,9 @@ export default function FrenchPracticePage() {
         <h2 className="text-xl font-bold">1. 会話の元になるテキストを用意</h2>
         <p className="mt-1 text-sm text-stone-600">
           テキストファイル（.txt / .md）、または教科書などのページ写真をアップロードできます。写真はAIが文字を読み取ってテキスト化します。
+        </p>
+        <p className="mt-1 text-xs text-stone-500">
+          💡 読み取り精度を上げるコツ: 見開き2ページ全体より、会話文（Dialogue）部分だけを大きく・まっすぐ・明るい場所で撮影すると誤読が減ります。読み取り結果は下のテキスト欄で必ず確認し、間違いがあれば直接修正してください。
         </p>
         <input
           className="input mt-3 w-full"
