@@ -87,6 +87,9 @@ export default function FrenchPracticePage() {
   const [hideUserMessages, setHideUserMessages] = useState(false);
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
+  // 会話中の話者ラベル（例:「L'employé」「La cliente」）。AIの最初の応答で決まる
+  const [aiRoleLabel, setAiRoleLabel] = useState("");
+  const [userRoleLabel, setUserRoleLabel] = useState("");
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
   const [exerciseAnswers, setExerciseAnswers] = useState<Record<string, string>>({});
   const [checkedExercises, setCheckedExercises] = useState<Record<string, boolean>>({});
@@ -426,6 +429,8 @@ export default function FrenchPracticePage() {
         vocabularyBank: accumulatedVocab,
         grammarNotes: accumulatedGrammar.map((g) => `${g.title}: ${g.explanation_ja}`),
         roleSwapped,
+        aiRoleLabel,
+        userRoleLabel,
       }),
     });
     const data = await res.json();
@@ -435,6 +440,8 @@ export default function FrenchPracticePage() {
       reply_translation_ja: string;
       correction_fr: string | null;
       correction_note_ja: string | null;
+      ai_role_label: string;
+      user_role_label: string;
     };
   }
 
@@ -482,6 +489,8 @@ export default function FrenchPracticePage() {
     setActiveMaterialLabel(topic.label);
     setError("");
     setMessages([]);
+    setAiRoleLabel("");
+    setUserRoleLabel("");
     setStarted(true);
     if (roleSwapped) {
       // 役割交代モード：AIからは話しかけず、ユーザーの最初の発言を待つ
@@ -491,6 +500,8 @@ export default function FrenchPracticePage() {
     try {
       const data = await callChatApi(topic.text);
       setMessages([{ role: "assistant", french: data.reply, translation: data.reply_translation_ja }]);
+      setAiRoleLabel(data.ai_role_label || "");
+      setUserRoleLabel(data.user_role_label || "");
       if (autoSpeak) speakText(data.reply);
     } catch (e: any) {
       setError(e.message);
@@ -526,6 +537,8 @@ export default function FrenchPracticePage() {
           { role: "assistant", french: data.reply, translation: data.reply_translation_ja },
         ];
       });
+      setAiRoleLabel(data.ai_role_label || "");
+      setUserRoleLabel(data.user_role_label || "");
       if (autoSpeak) speakText(data.reply);
     } catch (e: any) {
       setError(e.message);
@@ -538,6 +551,8 @@ export default function FrenchPracticePage() {
     setMessages([]);
     setStarted(false);
     setError("");
+    setAiRoleLabel("");
+    setUserRoleLabel("");
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   }
 
@@ -782,6 +797,9 @@ export default function FrenchPracticePage() {
             {messages.map((m, i) =>
               m.role === "assistant" ? (
                 <div key={i} className="flex flex-col items-start">
+                  {aiRoleLabel && (
+                    <div className="mb-0.5 text-[11px] font-semibold text-stone-400">{aiRoleLabel}</div>
+                  )}
                   <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-white border border-stone-200 px-4 py-2 text-sm">
                     {m.french}
                   </div>
@@ -800,6 +818,9 @@ export default function FrenchPracticePage() {
                 </div>
               ) : (
                 <div key={i} className="flex flex-col items-end">
+                  {!hideUserMessages && userRoleLabel && (
+                    <div className="mb-0.5 text-[11px] font-semibold text-stone-400">{userRoleLabel}</div>
+                  )}
                   {!hideUserMessages && (
                     <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
                       {m.french}

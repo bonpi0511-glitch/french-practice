@@ -27,6 +27,8 @@ const RequestBody = z.object({
   vocabularyBank: z.array(z.string()).max(300).default([]),
   grammarNotes: z.array(z.string()).max(50).default([]),
   roleSwapped: z.boolean().default(false),
+  aiRoleLabel: z.string().max(80).optional(),
+  userRoleLabel: z.string().max(80).optional(),
 });
 
 const ChatTurn = z.object({
@@ -34,6 +36,8 @@ const ChatTurn = z.object({
   reply_translation_ja: z.string().default(""),
   correction_fr: z.string().nullable().default(null),
   correction_note_ja: z.string().nullable().default(null),
+  ai_role_label: z.string().default(""),
+  user_role_label: z.string().default(""),
 });
 
 function getTextFromResponse(response: any): string {
@@ -77,9 +81,12 @@ export async function POST(req: NextRequest) {
 - 難しい語彙を使う場合は、reply の中で simple に言い換えるか短く補足してもよい。
 - 「これまで学習した語彙」が渡されている場合、それは過去にアップロードした教材から蓄積された復習用のリストです。今日の教材の話題を壊さない範囲で、レベルに合ったものを1〜2個ほど自然に会話に混ぜて復習の機会を作ってください（無理に全部使う必要はありません）。
 - 「これまでの文法解説」が渡されている場合、それは教材（教科書の Grammaire 欄など）から抽出した文法ポイントです。correction_note_ja でユーザーの間違いを説明する際、関連する文法解説があればその内容と用語を使って日本語で説明してください（例:「これは名詞の性の一致のルールです。教材にもあった通り…」のように）。関連するものが無ければ通常通り説明してください。
+- ai_role_label には、あなたが演じているキャラクターを表す短いラベルを入れる。教材の会話文に話者表記（例:「L'employé」「La cliente」「Monsieur」など）があればそれをそのまま使う。無ければ会話の内容から適切な短いフランス語のラベルを考える（例:「Le vendeur」「La touriste」など）。
+- user_role_label には、ユーザーが演じているもう一方のキャラクターの同様のラベルを入れる。
+- ai_role_label と user_role_label は、会話が続く間は毎回同じ表記に統一すること（前のターンで使ったラベルがあれば、それと完全に同じ文字列を使う）。
 
 JSON の形式:
-{"reply":"","reply_translation_ja":"","correction_fr":null,"correction_note_ja":null}`;
+{"reply":"","reply_translation_ja":"","correction_fr":null,"correction_note_ja":null,"ai_role_label":"","user_role_label":""}`;
 
     const vocabSection = body.vocabularyBank.length
       ? `\n\nこれまで学習した語彙（復習用、過去にアップロードした教材から蓄積）:\n${body.vocabularyBank
@@ -91,8 +98,13 @@ JSON の形式:
       ? `\n\nこれまでの文法解説（教材から抽出、日本語）:\n${body.grammarNotes.slice(-50).join("\n")}`
       : "";
 
+    const roleLabelSection =
+      body.aiRoleLabel || body.userRoleLabel
+        ? `\n\nこれまで使ってきた話者ラベル（今回も必ず同じ文字列を使うこと）:\nあなた: ${body.aiRoleLabel || "(未設定)"}\nユーザー: ${body.userRoleLabel || "(未設定)"}`
+        : "";
+
     const userContent = [
-      `教材テキスト:\n"""\n${body.sourceText.slice(0, 6000)}\n"""${vocabSection}${grammarSection}`,
+      `教材テキスト:\n"""\n${body.sourceText.slice(0, 6000)}\n"""${vocabSection}${grammarSection}${roleLabelSection}`,
       body.userMessage
         ? `ユーザーの直近の発言（フランス語）: "${body.userMessage}"`
         : "これは会話の最初のターンです。教材テキスト中の会話文をそのまま一字一句コピーして reply に入れてください（新しく文章を作らないこと）。",
