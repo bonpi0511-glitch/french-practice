@@ -55,6 +55,17 @@ function formatDate(iso: string) {
   }
 }
 
+// アップロードしたテキストの先頭行を、蓄積データのタイトルとして使う
+// （教科書などは最初の行に単元名・見出しが書かれていることが多いため）
+function extractTitleFromText(text: string): string {
+  const firstLine = text
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!firstLine) return "";
+  return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
+}
+
 export default function FrenchPracticePage() {
   const [sourceText, setSourceText] = useState("");
   const [fileName, setFileName] = useState("");
@@ -70,6 +81,8 @@ export default function FrenchPracticePage() {
   const [bankLoading, setBankLoading] = useState(false);
   const [topicMode, setTopicMode] = useState<TopicMode>("single");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  // false: AIが先に話す（教材の1人目の役）／true: ユーザーが先に話す（役割を交代）
+  const [roleSwapped, setRoleSwapped] = useState(false);
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
@@ -381,13 +394,14 @@ export default function FrenchPracticePage() {
     }
 
     const combined = collected.filter(Boolean).join("\n\n");
-    const label = files.map((f) => f.name).join(", ");
+    const fileLabel = files.map((f) => f.name).join(", ");
     if (combined) {
       setSourceText(combined);
       // アップロードした教材は自動でボキャブラリーバンクに蓄積する
-      addToVocabBank(combined, label);
+      // （テキストの先頭行をタイトルとして使い、無ければファイル名にフォールバック）
+      addToVocabBank(combined, extractTitleFromText(combined) || fileLabel);
     }
-    setFileName(label);
+    setFileName(fileLabel);
   }
 
   function historyForApi() {
@@ -409,6 +423,7 @@ export default function FrenchPracticePage() {
         userMessage,
         vocabularyBank: accumulatedVocab,
         grammarNotes: accumulatedGrammar.map((g) => `${g.title}: ${g.explanation_ja}`),
+        roleSwapped,
       }),
     });
     const data = await res.json();
@@ -464,9 +479,13 @@ export default function FrenchPracticePage() {
     setActiveSourceText(topic.text);
     setActiveMaterialLabel(topic.label);
     setError("");
-    setLoading(true);
     setMessages([]);
     setStarted(true);
+    if (roleSwapped) {
+      // 役割交代モード：AIからは話しかけず、ユーザーの最初の発言を待つ
+      return;
+    }
+    setLoading(true);
     try {
       const data = await callChatApi(topic.text);
       setMessages([{ role: "assistant", french: data.reply, translation: data.reply_translation_ja }]);
@@ -612,7 +631,7 @@ export default function FrenchPracticePage() {
           <button
             className="btn btn-secondary text-xs"
             disabled={bankLoading || !sourceText.trim()}
-            onClick={() => addToVocabBank(sourceText, "手入力テキスト")}
+            onClick={() => addToVocabBank(sourceText, extractTitleFromText(sourceText) || "手入力テキスト")}
           >
             このテキストをボキャブラリーバンクに保存
           </button>
@@ -689,6 +708,18 @@ export default function FrenchPracticePage() {
           </div>
         </div>
 
+        <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
+          <input
+            type="checkbox"
+            checked={roleSwapped}
+            onChange={(e) => setRoleSwapped(e.target.checked)}
+          />
+          🔄 役割を交代する（先にあなたが話す）
+        </label>
+        <p className="mt-1 text-xs text-stone-500">
+          教材の会話は2人の話者を想定しています。オフだとAIが1人目の役で話しかけ、あなたが2人目の役で応答します。オンにすると逆に、あなたが先に話しかけ、AIがもう一方の役を演じます。
+        </p>
+
         {speechSupported && (
           <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
             <input
@@ -729,6 +760,11 @@ export default function FrenchPracticePage() {
           )}
 
           <div ref={scrollRef} className="mt-3 max-h-[520px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4">
+            {roleSwapped && messages.length === 0 && (
+              <div className="rounded-xl border border-dashed border-stone-300 bg-white p-3 text-xs text-stone-500">
+                🔄 役割交代モードです。まずはあなたから、教材の会話を参考にフランス語で話しかけてみましょう。
+              </div>
+            )}
             {messages.map((m, i) =>
               m.role === "assistant" ? (
                 <div key={i} className="flex flex-col items-start">

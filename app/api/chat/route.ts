@@ -26,6 +26,7 @@ const RequestBody = z.object({
   userMessage: z.string().max(2000).optional(),
   vocabularyBank: z.array(z.string()).max(300).default([]),
   grammarNotes: z.array(z.string()).max(50).default([]),
+  roleSwapped: z.boolean().default(false),
 });
 
 const ChatTurn = z.object({
@@ -64,6 +65,11 @@ export async function POST(req: NextRequest) {
 進め方のルール:
 - ユーザーがアップロードしたテキスト（下記「教材テキスト」）を話題・語彙のベースとして会話を組み立てる。教材の内容について質問したり、関連する話題を広げたりする。
 - 会話のレベルは「${levelLabel[body.level]}」に合わせる。
+- 教材の会話文には基本的に2人の話者がいます。現在のモードは「${
+      body.roleSwapped
+        ? "役割交代：ユーザーが1人目（先に話す側）の役、あなたが2人目の役"
+        : "通常：あなたが1人目（先に話す側）の役、ユーザーが2人目の役"
+    }」です。あなたは会話全体を通して、自分が演じる側の人物・立場（店員なら店員、客なら客など）を一貫して保ち、ユーザーが演じるもう一方の人物として自然に受け答えしてください。
 - あなたの返答（reply）は必ずフランス語で、1〜3文程度の短い自然な会話文にする。世間話のように、最後は質問で終えて会話を続けやすくする。
 - reply_translation_ja には reply の自然な日本語訳を入れる。
 - ユーザーからの直近の発言（userMessage）がある場合、文法・語彙・スペルの誤りがあれば correction_fr に自然なフランス語の訂正例を、correction_note_ja に何をどう直したかの短い日本語説明を入れる。誤りがなければ両方 null にする。
