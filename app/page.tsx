@@ -90,6 +90,10 @@ export default function FrenchPracticePage() {
   // 会話中の話者ラベル（例:「L'employé」「La cliente」）。AIの最初の応答で決まる
   const [aiRoleLabel, setAiRoleLabel] = useState("");
   const [userRoleLabel, setUserRoleLabel] = useState("");
+  // 初心者モード：自分が話す前に「回答例」を表示する
+  const [beginnerMode, setBeginnerMode] = useState(false);
+  const [suggestion, setSuggestion] = useState<{ fr: string; ja: string } | null>(null);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
   const [exerciseAnswers, setExerciseAnswers] = useState<Record<string, string>>({});
   const [checkedExercises, setCheckedExercises] = useState<Record<string, boolean>>({});
@@ -144,7 +148,7 @@ export default function FrenchPracticePage() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading, input]);
+  }, [messages, loading, input, suggestion]);
 
   function saveBank(next: MaterialEntry[]) {
     setVocabBank(next);
@@ -417,6 +421,38 @@ export default function FrenchPracticePage() {
     );
   }
 
+  // 初心者モード：自分が話す前に「回答例」をAIに考えてもらう
+  async function fetchSuggestion(
+    text: string,
+    history: { role: "user" | "assistant"; content: string }[],
+    roleLabels?: { ai: string; user: string }
+  ) {
+    if (!beginnerMode) return;
+    setSuggestionLoading(true);
+    setSuggestion(null);
+    try {
+      const res = await fetch("/api/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceText: text,
+          level,
+          history,
+          roleSwapped,
+          aiRoleLabel: roleLabels?.ai ?? aiRoleLabel,
+          userRoleLabel: roleLabels?.user ?? userRoleLabel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "回答例の取得に失敗しました");
+      setSuggestion({ fr: data.suggestion_fr, ja: data.suggestion_ja });
+    } catch {
+      setSuggestion(null);
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }
+
   async function callChatApi(text: string, userMessage?: string) {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -491,9 +527,11 @@ export default function FrenchPracticePage() {
     setMessages([]);
     setAiRoleLabel("");
     setUserRoleLabel("");
+    setSuggestion(null);
     setStarted(true);
     if (roleSwapped) {
       // 役割交代モード：AIからは話しかけず、ユーザーの最初の発言を待つ
+      fetchSuggestion(topic.text, []);
       return;
     }
     setLoading(true);
@@ -503,6 +541,11 @@ export default function FrenchPracticePage() {
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
       if (autoSpeak) speakText(data.reply);
+      fetchSuggestion(
+        topic.text,
+        [{ role: "assistant", content: data.reply }],
+        { ai: data.ai_role_label || "", user: data.user_role_label || "" }
+      );
     } catch (e: any) {
       setError(e.message);
       setStarted(false);
@@ -516,6 +559,8 @@ export default function FrenchPracticePage() {
     if (!text || loading) return;
     setError("");
     setInput("");
+    setSuggestion(null);
+    const priorHistory = historyForApi();
     const userMsg: Message = { role: "user", french: text, correction: null, correctionNote: null };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
@@ -540,6 +585,11 @@ export default function FrenchPracticePage() {
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
       if (autoSpeak) speakText(data.reply);
+      fetchSuggestion(
+        activeSourceText,
+        [...priorHistory, { role: "user", content: text }, { role: "assistant", content: data.reply }],
+        { ai: data.ai_role_label || "", user: data.user_role_label || "" }
+      );
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -553,6 +603,7 @@ export default function FrenchPracticePage() {
     setError("");
     setAiRoleLabel("");
     setUserRoleLabel("");
+    setSuggestion(null);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   }
 
@@ -749,6 +800,18 @@ export default function FrenchPracticePage() {
           オンにすると、会話練習画面であなたが送った・話した内容の吹き出しが表示されなくなります（AIの発言・添削は今まで通り表示されます。会話の判定自体には影響しません）。
         </p>
 
+        <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
+          <input
+            type="checkbox"
+            checked={beginnerMode}
+            onChange={(e) => setBeginnerMode(e.target.checked)}
+          />
+          🔰 初心者モード（話す前に回答例を表示する）
+        </label>
+        <p className="mt-1 text-xs text-stone-500">
+          何も話せない・思いつかない場合向けです。オンにすると、自分の番になるたびに「回答例」の吹き出しが薄い緑色で表示されます。読む・聞く・入力欄にコピーして使う、いずれの練習にも使えます。
+        </p>
+
         {speechSupported && (
           <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
             <input
@@ -834,6 +897,39 @@ export default function FrenchPracticePage() {
                   )}
                 </div>
               )
+            )}
+            {beginnerMode && suggestionLoading && (
+              <div className="text-xs text-stone-400">回答例を考えています...</div>
+            )}
+            {beginnerMode && suggestion && (
+              <div className="flex flex-col items-end">
+                {userRoleLabel && (
+                  <div className="mb-0.5 text-[11px] font-semibold text-emerald-600">
+                    💡 {userRoleLabel}（回答例）
+                  </div>
+                )}
+                <div className="max-w-[85%] rounded-2xl rounded-tr-sm border-2 border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
+                  {suggestion.fr}
+                </div>
+                <div className="mt-1 flex max-w-[85%] items-center gap-2 text-xs text-stone-500">
+                  <span>{suggestion.ja}</span>
+                  {speechSupported && (
+                    <button
+                      className="shrink-0 text-stone-400 hover:text-stone-600"
+                      onClick={() => speakText(suggestion.fr)}
+                      title="聞く"
+                    >
+                      🔊
+                    </button>
+                  )}
+                  <button
+                    className="shrink-0 text-emerald-700 underline"
+                    onClick={() => setInput(suggestion.fr)}
+                  >
+                    入力欄に使う
+                  </button>
+                </div>
+              </div>
             )}
             {!hideUserMessages && !loading && input.trim() && (
               <div className="flex flex-col items-end">
