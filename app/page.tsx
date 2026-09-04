@@ -141,7 +141,7 @@ export default function FrenchPracticePage() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, input]);
 
   function saveBank(next: MaterialEntry[]) {
     setVocabBank(next);
@@ -813,6 +813,14 @@ export default function FrenchPracticePage() {
                   )}
                 </div>
               )
+            )}
+            {!hideUserMessages && !loading && input.trim() && (
+              <div className="flex flex-col items-end">
+                <div className="max-w-[85%] rounded-2xl rounded-tr-sm border-2 border-dashed border-[#1c2b4a] bg-white px-4 py-2 text-sm text-[#1c2b4a] opacity-70">
+                  {input}
+                </div>
+                <span className="mt-1 text-xs text-stone-400">送信前のプレビュー</span>
+              </div>
             )}
             {loading && <div className="text-xs text-stone-400">相手が入力中...</div>}
           </div>
