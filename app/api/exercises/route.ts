@@ -9,10 +9,17 @@ const RequestBody = z.object({
   text: z.string().min(1).max(20000),
 });
 
+// 「複数選択」の設問などで、AIが answer を配列で返してくることがあるため、
+// 文字列・文字列配列のどちらで来ても壊れないよう吸収する
+const stringish = z
+  .union([z.string(), z.array(z.string())])
+  .transform((v) => (Array.isArray(v) ? v.filter(Boolean).join("、") : v))
+  .catch("");
+
 const ExerciseItem = z.object({
-  prompt: z.string(),
-  answer: z.string(),
-  explanation_ja: z.string(),
+  prompt: stringish,
+  answer: stringish,
+  explanation_ja: stringish,
   qtype: z.enum(["choice", "text"]).default("text"),
   choices: z.array(z.string()).max(6).default([]),
 });
@@ -48,7 +55,7 @@ export async function POST(req: NextRequest) {
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文そのもの（例:「1. ___ baguette」「Vrai ou faux ? La cliente achète du pain.」など、元の番号や空欄（___）も含めて。ただし選択肢そのものはここに含めず choices に分ける）
-- answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に。choice タイプの場合は choices のいずれかと完全に一致させる）
+- answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に。choice タイプの場合は choices のいずれかと完全に一致させる。正解が複数ある設問（複数選択など）の場合も、配列ではなく「、」で区切った1つの文字列にすること）
 - explanation_ja: なぜその答えになるか、日本語で短く（1〜2文）説明
 - qtype: 回答形式。以下のいずれか:
   - "choice": 正誤問題（Vrai/Faux）や、選択肢が明示されている選択問題。この場合 choices に選べる選択肢をすべて入れる（Vrai/Fauxなら choices は ["Vrai","Faux"]）

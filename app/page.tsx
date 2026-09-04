@@ -83,6 +83,8 @@ export default function FrenchPracticePage() {
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   // false: AIが先に話す（教材の1人目の役）／true: ユーザーが先に話す（役割を交代）
   const [roleSwapped, setRoleSwapped] = useState(false);
+  // true にすると、会話画面で自分（ユーザー）が話した内容の吹き出しを表示しない
+  const [hideUserMessages, setHideUserMessages] = useState(false);
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
   const [revealedExercises, setRevealedExercises] = useState<Set<string>>(new Set());
@@ -720,6 +722,18 @@ export default function FrenchPracticePage() {
           教材の会話は2人の話者を想定しています。オフだとAIが1人目の役で話しかけ、あなたが2人目の役で応答します。オンにすると逆に、あなたが先に話しかけ、AIがもう一方の役を演じます。
         </p>
 
+        <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
+          <input
+            type="checkbox"
+            checked={hideUserMessages}
+            onChange={(e) => setHideUserMessages(e.target.checked)}
+          />
+          🙈 自分の発言を会話画面に表示しない
+        </label>
+        <p className="mt-1 text-xs text-stone-500">
+          オンにすると、会話練習画面であなたが送った・話した内容の吹き出しが表示されなくなります（AIの発言・添削は今まで通り表示されます。会話の判定自体には影響しません）。
+        </p>
+
         {speechSupported && (
           <label className="mt-3 flex items-center gap-2 text-sm text-stone-600">
             <input
@@ -786,9 +800,11 @@ export default function FrenchPracticePage() {
                 </div>
               ) : (
                 <div key={i} className="flex flex-col items-end">
-                  <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
-                    {m.french}
-                  </div>
+                  {!hideUserMessages && (
+                    <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
+                      {m.french}
+                    </div>
+                  )}
                   {m.correction && (
                     <div className="mt-1 max-w-[85%] rounded-xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                       <div className="font-bold">添削: {m.correction}</div>
