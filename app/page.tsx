@@ -66,6 +66,35 @@ function extractTitleFromText(text: string): string {
   return firstLine.length > 60 ? firstLine.slice(0, 60) + "…" : firstLine;
 }
 
+// 教材テキストから「話者名: セリフ」形式の会話行をそのまま抜き出す。
+// 初心者モードでは、AIにアレンジさせずこの配列の順番通りにセリフを1つずつ使うことで、
+// 会話を教材の内容だけで（プロンプトの指示に頼らず）確実に完結させる。
+function parseDialogueLines(text: string): { speaker: string; line: string }[] {
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const pattern = /^([^:：]{1,40})[:：]\s*(.+)$/;
+  const result: { speaker: string; line: string }[] = [];
+  let collecting = false;
+  for (const l of lines) {
+    const m = l.match(pattern);
+    if (m) {
+      const speaker = m[1].trim();
+      if (speaker && !/^\d+[.)]?$/.test(speaker)) {
+        result.push({ speaker, line: m[2].trim() });
+        collecting = true;
+        continue;
+      }
+    }
+    if (collecting) break; // 会話文ブロックが終わったとみなす
+  }
+  return result;
+}
+
+const BEGINNER_CLOSING_FR = "Merci beaucoup, c'est tout pour cette leçon !";
+const BEGINNER_CLOSING_JA = "ありがとうございました。今回のレッスンはこれで終わりです。";
+
 export default function FrenchPracticePage() {
   const [sourceText, setSourceText] = useState("");
   const [fileName, setFileName] = useState("");
@@ -432,6 +461,10 @@ export default function FrenchPracticePage() {
     if (!beginnerMode) return;
     setSuggestionLoading(true);
     setSuggestion(null);
+    // 教材の会話文が抽出できる場合は、次に対応するセリフをそのまま使う
+    // （AIの応答に頼らず、確実に教材通りにする）
+    const dialogueLines = parseDialogueLines(text);
+    const forcedText = dialogueLines[history.length]?.line;
     try {
       const res = await fetch("/api/suggest", {
         method: "POST",
@@ -443,11 +476,12 @@ export default function FrenchPracticePage() {
           roleSwapped,
           aiRoleLabel: roleLabels?.ai ?? aiRoleLabel,
           userRoleLabel: roleLabels?.user ?? userRoleLabel,
+          forcedSuggestion: forcedText,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "回答例の取得に失敗しました");
-      setSuggestion({ fr: data.suggestion_fr, ja: data.suggestion_ja });
+      setSuggestion({ fr: forcedText ?? data.suggestion_fr, ja: data.suggestion_ja });
     } catch {
       setSuggestion(null);
     } finally {
@@ -455,7 +489,7 @@ export default function FrenchPracticePage() {
     }
   }
 
-  async function callChatApi(text: string, userMessage?: string) {
+  async function callChatApi(text: string, userMessage?: string, forcedReply?: string) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -470,6 +504,7 @@ export default function FrenchPracticePage() {
         aiRoleLabel,
         userRoleLabel,
         beginnerMode,
+        forcedReply,
       }),
     });
     const data = await res.json();
@@ -540,17 +575,36 @@ export default function FrenchPracticePage() {
       return;
     }
     setLoading(true);
+    // 初心者モードでは、教材の会話文が抽出できる限り、AIの最初の発言もそこから
+    // そのまま取る（無ければ通常通りAIに考えてもらう）
+    let forcedReply: string | undefined;
+    let willFinish = false;
+    if (beginnerMode) {
+      const dialogueLines = parseDialogueLines(topic.text);
+      if (dialogueLines.length > 0) {
+        const nextLine = dialogueLines[0];
+        if (nextLine) {
+          forcedReply = nextLine.line;
+        } else {
+          forcedReply = BEGINNER_CLOSING_FR;
+          willFinish = true;
+        }
+      }
+    }
     try {
-      const data = await callChatApi(topic.text);
-      setMessages([{ role: "assistant", french: data.reply, translation: data.reply_translation_ja }]);
+      const data = await callChatApi(topic.text, undefined, forcedReply);
+      const replyFr = forcedReply ?? data.reply;
+      const replyJa = forcedReply === BEGINNER_CLOSING_FR ? BEGINNER_CLOSING_JA : data.reply_translation_ja;
+      setMessages([{ role: "assistant", french: replyFr, translation: replyJa }]);
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
-      setConversationFinished(!!data.is_finished);
-      if (autoSpeak) speakText(data.reply);
-      if (!data.is_finished) {
+      const finished = willFinish || !!data.is_finished;
+      setConversationFinished(finished);
+      if (autoSpeak) speakText(replyFr);
+      if (!finished) {
         fetchSuggestion(
           topic.text,
-          [{ role: "assistant", content: data.reply }],
+          [{ role: "assistant", content: replyFr }],
           { ai: data.ai_role_label || "", user: data.user_role_label || "" }
         );
       }
@@ -572,8 +626,27 @@ export default function FrenchPracticePage() {
     const userMsg: Message = { role: "user", french: text, correction: null, correctionNote: null };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
+    // 初心者モードでは、教材の会話文が抽出できる限り、AIの次の発言もそこから
+    // 順番にそのまま取る（使い切ったら会話を終える）
+    let forcedReply: string | undefined;
+    let willFinish = false;
+    if (beginnerMode) {
+      const dialogueLines = parseDialogueLines(activeSourceText);
+      if (dialogueLines.length > 0) {
+        const aiTurnIndex = priorHistory.length + 1;
+        const nextLine = dialogueLines[aiTurnIndex];
+        if (nextLine) {
+          forcedReply = nextLine.line;
+        } else {
+          forcedReply = BEGINNER_CLOSING_FR;
+          willFinish = true;
+        }
+      }
+    }
     try {
-      const data = await callChatApi(activeSourceText, text);
+      const data = await callChatApi(activeSourceText, text, forcedReply);
+      const replyFr = forcedReply ?? data.reply;
+      const replyJa = forcedReply === BEGINNER_CLOSING_FR ? BEGINNER_CLOSING_JA : data.reply_translation_ja;
       setMessages((prev) => {
         const next = [...prev];
         const lastIdx = next.length - 1;
@@ -587,17 +660,18 @@ export default function FrenchPracticePage() {
         }
         return [
           ...next,
-          { role: "assistant", french: data.reply, translation: data.reply_translation_ja },
+          { role: "assistant", french: replyFr, translation: replyJa },
         ];
       });
       setAiRoleLabel(data.ai_role_label || "");
       setUserRoleLabel(data.user_role_label || "");
-      setConversationFinished(!!data.is_finished);
-      if (autoSpeak) speakText(data.reply);
-      if (!data.is_finished) {
+      const finished = willFinish || !!data.is_finished;
+      setConversationFinished(finished);
+      if (autoSpeak) speakText(replyFr);
+      if (!finished) {
         fetchSuggestion(
           activeSourceText,
-          [...priorHistory, { role: "user", content: text }, { role: "assistant", content: data.reply }],
+          [...priorHistory, { role: "user", content: text }, { role: "assistant", content: replyFr }],
           { ai: data.ai_role_label || "", user: data.user_role_label || "" }
         );
       }

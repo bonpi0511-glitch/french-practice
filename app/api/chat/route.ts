@@ -30,6 +30,9 @@ const RequestBody = z.object({
   aiRoleLabel: z.string().max(80).optional(),
   userRoleLabel: z.string().max(80).optional(),
   beginnerMode: z.boolean().default(false),
+  // クライアント側で教材の会話文から機械的に抽出した「次のセリフ」。
+  // 指定されている場合、reply は必ずこの文字列にする（AIによるアレンジを完全に排除するため）
+  forcedReply: z.string().max(2000).optional(),
 });
 
 const ChatTurn = z.object({
@@ -95,6 +98,11 @@ ${
   - それ以外の場合（まだ教材のセリフが残っている場合）は is_finished を false にする。`
     : `- is_finished は常に false にする（このモードでは会話を打ち切らない）。`
 }
+${
+  body.forcedReply
+    ? `- 【最優先・絶対厳守】reply には次のテキストを一字一句そのまま入れてください。言い換え・アレンジ・追加は一切禁止です: "${body.forcedReply}"\n- reply_translation_ja には、そのテキストの自然な日本語訳を入れてください。`
+    : ""
+}
 
 JSON の形式:
 {"reply":"","reply_translation_ja":"","correction_fr":null,"correction_note_ja":null,"ai_role_label":"","user_role_label":"","is_finished":false}`;
@@ -143,6 +151,11 @@ JSON の形式:
 
     const text = getTextFromResponse(response);
     const parsed = ChatTurn.parse(JSON.parse(text));
+    // forcedReply が指定されている場合、AIが何を返してきても reply はこちらで強制的に
+    // 上書きする（プロンプトの指示だけに頼らず、確実に教材の原文どおりにするため）
+    if (body.forcedReply) {
+      parsed.reply = body.forcedReply;
+    }
     return NextResponse.json(parsed);
   } catch (e: any) {
     const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };

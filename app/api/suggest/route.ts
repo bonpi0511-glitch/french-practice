@@ -26,6 +26,9 @@ const RequestBody = z.object({
   roleSwapped: z.boolean().default(false),
   aiRoleLabel: z.string().max(80).optional(),
   userRoleLabel: z.string().max(80).optional(),
+  // クライアント側で教材の会話文から機械的に抽出した「次のセリフ」。
+  // 指定されている場合、suggestion_fr は必ずこの文字列にする
+  forcedSuggestion: z.string().max(2000).optional(),
 });
 
 const Suggestion = z.object({
@@ -67,6 +70,11 @@ export async function POST(req: NextRequest) {
 - 教材のセリフが会話の中で全て使われてしまった場合、または直前のAIの発言（会話の一番最後の発言）の内容に教材のどのセリフも自然につながらない場合は、教材のセリフをそのまま繰り返すのではなく、直前のAIの発言に対する自然な返答を新しく考えること（教材で使われている語彙・言い回しを参考にする）。
 - レベルは「${levelLabel[body.level]}」を参考にしつつ、教材の原文がある場合はそれを優先する。
 - suggestion_fr にはフランス語の例文、suggestion_ja にはその自然な日本語訳を入れる。
+${
+  body.forcedSuggestion
+    ? `- 【最優先・絶対厳守】suggestion_fr には次のテキストを一字一句そのまま入れてください。言い換え・アレンジ禁止: "${body.forcedSuggestion}"\n- suggestion_ja には、そのテキストの自然な日本語訳を入れてください。`
+    : ""
+}
 
 JSON の形式:
 {"suggestion_fr":"","suggestion_ja":""}`;
@@ -95,6 +103,9 @@ JSON の形式:
 
     const text = getTextFromResponse(response);
     const parsed = Suggestion.parse(JSON.parse(text));
+    if (body.forcedSuggestion) {
+      parsed.suggestion_fr = body.forcedSuggestion;
+    }
     return NextResponse.json(parsed);
   } catch (e: any) {
     const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
