@@ -53,8 +53,10 @@ export async function POST(req: NextRequest) {
 
     const prompt = `以下はフランス語学習者がアップロードした教材テキストです。会話文・語彙・文法解説に加えて、教科書の練習問題欄（「Activités」など、穴埋め問題・正誤問題・選択問題・並べ替え問題・自由回答問題など）の設問がそのまま含まれている場合があります。
 
+教材には、1つの大問（例:「2 Complétez par « un », « une », « des ».」）の下に複数の小問（1. ___ baguette / 2. ___ glace / ...）がぶら下がっている構成がよくあります。この場合、小問1つ1つを別々の設問として抽出しつつ、それぞれの prompt の先頭に、その小問が属する大問の指示文（何を答えればよいかの説明）を必ず含めてください。小問の番号や文だけを見ても何をすればよいか分からない状態にしないでください。
+
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
-- prompt: 設問文そのもの（例:「1. ___ baguette」「Vrai ou faux ? La cliente achète du pain.」など、元の番号や空欄（___）も含めて。ただし選択肢そのものはここに含めず choices に分ける）
+- prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
 - answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に。choice タイプの場合は choices のいずれかと完全に一致させる。正解が複数ある設問（複数選択など）の場合も、配列ではなく「、」で区切った1つの文字列にすること）
 - explanation_ja: なぜその答えになるか、日本語で短く（1〜2文）説明
 - qtype: 回答形式。以下のいずれか:
@@ -74,6 +76,8 @@ ${body.text.slice(0, 20000)}
       model: process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1",
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       text: { format: { type: "json_object" } },
+      // 設問数が多い教材（最大30問）でも出力が途中で切れないよう、出力トークン数を多めに確保する
+      max_output_tokens: 4000,
     });
 
     const text = getTextFromResponse(response);
