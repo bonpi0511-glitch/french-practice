@@ -96,7 +96,7 @@ JSON のみで返してください: {"text":"書き起こした練習問題の�
 
     const [mainText, exercisesText] = await Promise.all([
       transcribe(mainInstruction, 4000),
-      transcribe(exercisesInstruction, 4000),
+      transcribe(exercisesInstruction, 8000),
     ]);
 
     const combined = [mainText.trim(), exercisesText.trim()].filter(Boolean).join("\n\n");

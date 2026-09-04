@@ -76,8 +76,9 @@ ${body.text.slice(0, 20000)}
       model: process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1",
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       text: { format: { type: "json_object" } },
-      // 設問数が多い教材（最大30問）でも出力が途中で切れないよう、出力トークン数を多めに確保する
-      max_output_tokens: 4000,
+      // 設問数が多い教材（最大30問、各問に日本語の説明も付く）でも出力が途中で切れないよう、
+      // 出力トークン数を十分に確保する（30問 × 説明文込みでも収まる余裕を持たせる）
+      max_output_tokens: 12000,
     });
 
     const text = getTextFromResponse(response);

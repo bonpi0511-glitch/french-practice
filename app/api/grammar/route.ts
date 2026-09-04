@@ -62,6 +62,7 @@ ${body.text.slice(0, 20000)}
       model: process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1",
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       text: { format: { type: "json_object" } },
+      max_output_tokens: 4000,
     });
 
     const text = getTextFromResponse(response);
