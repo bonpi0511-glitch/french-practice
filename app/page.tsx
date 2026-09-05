@@ -276,6 +276,38 @@ export default function FrenchPracticePage() {
     return out.slice(0, 20);
   }, [vocabBank]);
 
+  // OCR/AIが生成した文字列は、同じ大問の指示文でも小問ごとに全角/半角スペースや
+  // 引用符の種類（« » と " など）が微妙に揺れることがあるため、比較・接頭辞の
+  // 除去はこの揺れを吸収してから行う。
+  // normalizeChars: 文字数・位置を変えずに表記だけ揃える（prompt からの接頭辞除去で
+  // インデックスがずれないようにするため）
+  function normalizeChars(s: string) {
+    return s
+      .replace(/ /g, " ")
+      .replace(/[«»“”]/g, '"')
+      .replace(/[’‘]/g, "'")
+      .toLowerCase();
+  }
+  // normalizeForCompare: 空白の連続もまとめて1つにし、前後の空白も除去した上で比較する
+  function normalizeForCompare(s: string) {
+    return normalizeChars(s).replace(/\s+/g, " ").trim();
+  }
+  function stripGroupPrefix(prompt: string, group: string): string {
+    if (!group) return prompt;
+    const normPrompt = normalizeChars(prompt);
+    const normGroup = normalizeChars(group);
+    if (normPrompt.startsWith(normGroup)) {
+      return prompt.slice(normGroup.length).replace(/^[\s.:：]+/, "");
+    }
+    // 完全一致しない場合、空白の揺れだけを許容してもう一度試す
+    const escaped = normGroup.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    const m = normPrompt.match(new RegExp("^" + escaped));
+    if (m) {
+      return prompt.slice(m[0].length).replace(/^[\s.:：]+/, "");
+    }
+    return prompt;
+  }
+
   // 教材ごとの設問を、新しいものから並べてまとめる（最大30問）。
   // 同じ大問（groupTitle）に属する小問は、教材の見た目に合わせて1つの
   // カード（グループ）にまとめる。大問見出しが無い単独の設問は、それぞれ
@@ -294,14 +326,11 @@ export default function FrenchPracticePage() {
       for (let idx = 0; idx < entry.exercises.length && totalItems < 30; idx++) {
         const item = entry.exercises[idx];
         const group = item.groupTitle?.trim() || "";
-        const itemText =
-          group && item.prompt.startsWith(group)
-            ? item.prompt.slice(group.length).replace(/^[\s.:：]+/, "")
-            : item.prompt;
+        const itemText = stripGroupPrefix(item.prompt, group);
         const key = `${entry.id}-${idx}`;
         const listItem: ExerciseListItem = { key, item, itemText };
 
-        if (group && currentGroup && currentGroup.groupTitle === group) {
+        if (group && currentGroup && normalizeForCompare(currentGroup.groupTitle) === normalizeForCompare(group)) {
           currentGroup.items.push(listItem);
         } else {
           currentGroup = { groupKey: key, groupTitle: group, materialLabel: entry.label, items: [listItem] };

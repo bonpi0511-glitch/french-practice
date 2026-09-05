@@ -18,6 +18,7 @@ const stringish = z
 
 const ExerciseItem = z.object({
   prompt: stringish,
+  group_title: stringish,
   answer: stringish,
   explanation_ja: stringish,
   qtype: z.enum(["choice", "text"]).default("text"),
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
+- group_title: prompt の先頭に含めた「大問の指示文」の部分だけを、そのまま入れる（例:「Complétez par « un », « une » ou « des ».」「Relisez le dialogue ci-contre. Vrai ou faux ?」）。同じ大問に属する小問は、すべて同じ group_title（一字一句同じ文字列）にすること。大問に属さない独立した設問の場合は空文字にする。
 - answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に。choice タイプの場合は choices のいずれかと完全に一致させる。正解が複数ある設問（複数選択など）の場合も、配列ではなく「、」で区切った1つの文字列にすること）
 - explanation_ja: なぜその答えになるか、日本語で短く（1〜2文）説明
 - qtype: 回答形式。以下のいずれか:
@@ -65,7 +67,7 @@ export async function POST(req: NextRequest) {
 - choices: qtype が "choice" のときの選択肢一覧（フランス語のまま）。"text" のときは空配列
 
 設問が教材中に無い場合は exercises を空配列にしてください。設問ではない部分（会話文や語彙リストそのもの）は含めないでください。最大30問まで。
-JSON のみで返してください: {"exercises":[{"prompt":"","answer":"","explanation_ja":"","qtype":"text","choices":[]}]}
+JSON のみで返してください: {"exercises":[{"prompt":"","group_title":"","answer":"","explanation_ja":"","qtype":"text","choices":[]}]}
 
 教材テキスト:
 """
@@ -79,11 +81,23 @@ ${body.text.slice(0, 20000)}
       // 設問数が多い教材（最大30問、各問に日本語の説明も付く）でも出力が途中で切れないよう、
       // 出力トークン数を十分に確保する（30問 × 説明文込みでも収まる余裕を持たせる）
       max_output_tokens: 12000,
+      // group_title（大問の指示文）が小問ごとに表記ゆれ（空白・引用符など）で
+      // バラバラにならないよう、温度を下げて安定した出力にする
+      temperature: 0.1,
     });
 
     const text = getTextFromResponse(response);
     const parsed = Extraction.parse(JSON.parse(text));
-    return NextResponse.json(parsed);
+    // クライアント側の型（groupTitle）に合わせて変換して返す
+    const exercises = parsed.exercises.map((ex) => ({
+      prompt: ex.prompt,
+      groupTitle: ex.group_title,
+      answer: ex.answer,
+      explanation_ja: ex.explanation_ja,
+      qtype: ex.qtype,
+      choices: ex.choices,
+    }));
+    return NextResponse.json({ exercises });
   } catch (e: any) {
     const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
     console.error("Exercise extraction error:", e?.message, detail);
