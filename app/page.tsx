@@ -19,6 +19,9 @@ type GrammarPoint = { title: string; explanation_ja: string; examples: string[] 
 
 type ExerciseItem = {
   prompt: string;
+  // その設問が属する「大問」の指示文（例:「Complétez par « un », « une » ou « des ».」）。
+  // 教材の見た目に近づけるため、同じ groupTitle の設問はまとめて1つの見出しの下に表示する
+  groupTitle: string;
   answer: string;
   explanation_ja: string;
   qtype: "choice" | "text";
@@ -160,6 +163,7 @@ export default function FrenchPracticePage() {
           grammarPoints: Array.isArray(e?.grammarPoints) ? e.grammarPoints : [],
           exercises: (Array.isArray(e?.exercises) ? e.exercises : []).map((ex: any) => ({
             prompt: ex?.prompt || "",
+            groupTitle: ex?.groupTitle || "",
             answer: ex?.answer || "",
             explanation_ja: ex?.explanation_ja || "",
             qtype: ex?.qtype === "choice" ? "choice" : "text",
@@ -272,16 +276,41 @@ export default function FrenchPracticePage() {
     return out.slice(0, 20);
   }, [vocabBank]);
 
-  // 教材ごとの設問を、新しいものから並べてまとめる（最大30問）
-  const accumulatedExercises = useMemo(() => {
-    const out: { key: string; materialLabel: string; item: ExerciseItem }[] = [];
-    for (let i = vocabBank.length - 1; i >= 0; i--) {
+  // 教材ごとの設問を、新しいものから並べてまとめる（最大30問）。
+  // 同じ大問（groupTitle）に属する小問は、教材の見た目に合わせて1つの
+  // カード（グループ）にまとめる。大問見出しが無い単独の設問は、それぞれ
+  // 単独のグループ（1問1カード）になる。
+  type ExerciseListItem = { key: string; item: ExerciseItem; itemText: string };
+  type ExerciseGroup = { groupKey: string; groupTitle: string; materialLabel: string; items: ExerciseListItem[] };
+
+  const accumulatedExerciseGroups = useMemo(() => {
+    const groups: ExerciseGroup[] = [];
+    let currentGroup: ExerciseGroup | null = null;
+    let totalItems = 0;
+
+    for (let i = vocabBank.length - 1; i >= 0 && totalItems < 30; i--) {
       const entry = vocabBank[i];
-      entry.exercises.forEach((item, idx) => {
-        out.push({ key: `${entry.id}-${idx}`, materialLabel: entry.label, item });
-      });
+      currentGroup = null; // 教材が変わったら新しいカードから始める
+      for (let idx = 0; idx < entry.exercises.length && totalItems < 30; idx++) {
+        const item = entry.exercises[idx];
+        const group = item.groupTitle?.trim() || "";
+        const itemText =
+          group && item.prompt.startsWith(group)
+            ? item.prompt.slice(group.length).replace(/^[\s.:：]+/, "")
+            : item.prompt;
+        const key = `${entry.id}-${idx}`;
+        const listItem: ExerciseListItem = { key, item, itemText };
+
+        if (group && currentGroup && currentGroup.groupTitle === group) {
+          currentGroup.items.push(listItem);
+        } else {
+          currentGroup = { groupKey: key, groupTitle: group, materialLabel: entry.label, items: [listItem] };
+          groups.push(currentGroup);
+        }
+        totalItems++;
+      }
     }
-    return out.slice(0, 30);
+    return groups;
   }, [vocabBank]);
 
   function toggleExerciseAnswer(key: string) {
@@ -1160,86 +1189,101 @@ export default function FrenchPracticePage() {
         </section>
       )}
 
-      {accumulatedExercises.length > 0 && (
+      {accumulatedExerciseGroups.length > 0 && (
         <section className="card mt-4 p-5">
           <h2 className="text-xl font-bold">📝 設問（練習問題）</h2>
           <p className="mt-1 text-sm text-stone-600">
             教材に含まれていた練習問題（穴埋め・正誤問題など）です。回答してから「採点する」を押すか、「答えを見る」で正解を確認しましょう。
           </p>
 
-          <div className="mt-3 space-y-3">
-            {accumulatedExercises.map(({ key, materialLabel, item }, i) => {
-              const checked = !!checkedExercises[key];
-              const revealed = revealedExercises.has(key);
-              const correct = checked ? isExerciseAnswerCorrect(key, item.answer) : false;
-              return (
-                <div key={key} className="rounded-xl border border-stone-200 bg-white p-3">
-                  <div className="text-[11px] text-stone-400">{materialLabel}</div>
-                  <p className="mt-1 text-sm font-semibold text-stone-800">
-                    {i + 1}. {item.prompt}
-                  </p>
-
-                  <div className="mt-2 space-y-2">
-                    {item.qtype === "choice" && item.choices.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {item.choices.map((choice) => (
-                          <button
-                            key={choice}
-                            type="button"
-                            onClick={() => setExerciseAnswer(key, choice)}
-                            className={`rounded-lg border px-3 py-1.5 text-xs ${
-                              exerciseAnswers[key] === choice
-                                ? "border-[#1c2b4a] bg-[#1c2b4a] text-white"
-                                : "border-stone-300 bg-white text-stone-700"
-                            }`}
-                          >
-                            {choice}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={exerciseAnswers[key] || ""}
-                        onChange={(e) => setExerciseAnswer(key, e.target.value)}
-                        placeholder="回答を入力..."
-                        className="input w-full"
-                      />
+          <div className="mt-3 space-y-4">
+            {accumulatedExerciseGroups.map((group, gi) => (
+              <div key={group.groupKey} className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+                <div className="flex items-start gap-2 bg-stone-50 px-3 py-2">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-700 text-[11px] font-bold text-white">
+                    {gi + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-stone-400">{group.materialLabel}</div>
+                    {group.groupTitle && (
+                      <p className="text-sm font-bold text-stone-800">{group.groupTitle}</p>
                     )}
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="btn btn-primary text-xs"
-                        disabled={!(exerciseAnswers[key] || "").trim()}
-                        onClick={() => checkExercise(key)}
-                      >
-                        採点する
-                      </button>
-                      <button className="btn btn-secondary text-xs" onClick={() => toggleExerciseAnswer(key)}>
-                        {revealed ? "答えを隠す" : "答えを見る"}
-                      </button>
-                    </div>
                   </div>
-
-                  {checked && (
-                    <div className={`mt-2 rounded-lg p-2 text-sm ${correct ? "bg-emerald-50" : "bg-rose-50"}`}>
-                      <div className={`font-bold ${correct ? "text-emerald-700" : "text-rose-700"}`}>
-                        {correct ? "✅ 正解！" : "❌ 不正解"}
-                      </div>
-                      <div className="mt-1 font-bold text-[#1c2b4a]">正解: {item.answer}</div>
-                      <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
-                    </div>
-                  )}
-
-                  {revealed && (
-                    <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
-                      <div className="font-bold text-[#1c2b4a]">正解: {item.answer}</div>
-                      <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
+
+                <div className="divide-y divide-stone-100">
+                  {group.items.map(({ key, item, itemText }) => {
+                    const checked = !!checkedExercises[key];
+                    const revealed = revealedExercises.has(key);
+                    const correct = checked ? isExerciseAnswerCorrect(key, item.answer) : false;
+                    return (
+                      <div key={key} className="p-3">
+                        <p className="text-sm font-semibold text-stone-800">{itemText}</p>
+
+                        <div className="mt-2 space-y-2">
+                          {item.qtype === "choice" && item.choices.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                              {item.choices.map((choice) => (
+                                <button
+                                  key={choice}
+                                  type="button"
+                                  onClick={() => setExerciseAnswer(key, choice)}
+                                  className={`rounded-lg border px-3 py-1.5 text-xs ${
+                                    exerciseAnswers[key] === choice
+                                      ? "border-[#1c2b4a] bg-[#1c2b4a] text-white"
+                                      : "border-stone-300 bg-white text-stone-700"
+                                  }`}
+                                >
+                                  {choice}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={exerciseAnswers[key] || ""}
+                              onChange={(e) => setExerciseAnswer(key, e.target.value)}
+                              placeholder="回答を入力..."
+                              className="input w-full"
+                            />
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className="btn btn-primary text-xs"
+                              disabled={!(exerciseAnswers[key] || "").trim()}
+                              onClick={() => checkExercise(key)}
+                            >
+                              採点する
+                            </button>
+                            <button className="btn btn-secondary text-xs" onClick={() => toggleExerciseAnswer(key)}>
+                              {revealed ? "答えを隠す" : "答えを見る"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {checked && (
+                          <div className={`mt-2 rounded-lg p-2 text-sm ${correct ? "bg-emerald-50" : "bg-rose-50"}`}>
+                            <div className={`font-bold ${correct ? "text-emerald-700" : "text-rose-700"}`}>
+                              {correct ? "✅ 正解！" : "❌ 不正解"}
+                            </div>
+                            <div className="mt-1 font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                            <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
+                          </div>
+                        )}
+
+                        {revealed && (
+                          <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
+                            <div className="font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                            <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}
