@@ -58,6 +58,28 @@ function formatDate(iso: string) {
   }
 }
 
+// localStorage・サーバー（家族共有バンク）どちらから読み込んだデータでも、
+// 古いバージョンの形式や欠けている項目があってもクラッシュしないよう補完する
+function normalizeMaterialEntries(parsed: any): MaterialEntry[] {
+  return (Array.isArray(parsed) ? parsed : []).map((e: any) => ({
+    id: e?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    addedAt: e?.addedAt || new Date().toISOString(),
+    label: e?.label || "",
+    preview: e?.preview || "",
+    text: e?.text || e?.preview || "",
+    vocabulary: Array.isArray(e?.vocabulary) ? e.vocabulary : [],
+    grammarPoints: Array.isArray(e?.grammarPoints) ? e.grammarPoints : [],
+    exercises: (Array.isArray(e?.exercises) ? e.exercises : []).map((ex: any) => ({
+      prompt: ex?.prompt || "",
+      groupTitle: ex?.groupTitle || "",
+      answer: ex?.answer || "",
+      explanation_ja: ex?.explanation_ja || "",
+      qtype: ex?.qtype === "choice" ? "choice" : "text",
+      choices: Array.isArray(ex?.choices) ? ex.choices : [],
+    })),
+  }));
+}
+
 // アップロードしたテキストの先頭行を、蓄積データのタイトルとして使う
 // （教科書などは最初の行に単元名・見出しが書かれていることが多いため）
 function extractTitleFromText(text: string): string {
@@ -111,6 +133,7 @@ export default function FrenchPracticePage() {
   const [ocrError, setOcrError] = useState("");
   const [vocabBank, setVocabBank] = useState<MaterialEntry[]>([]);
   const [bankLoading, setBankLoading] = useState(false);
+  const [bankSyncing, setBankSyncing] = useState(false);
   const [topicMode, setTopicMode] = useState<TopicMode>("single");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   // false: AIが先に話す（教材の1人目の役）／true: ユーザーが先に話す（役割を交代）
@@ -147,32 +170,40 @@ export default function FrenchPracticePage() {
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) setSourceText(saved);
+
+    let localBank: MaterialEntry[] = [];
     try {
       const savedBank = localStorage.getItem(BANK_STORAGE_KEY);
       if (savedBank) {
-        const parsed = JSON.parse(savedBank);
-        // 古いバージョンで保存されたデータに新しい項目（text / exercises など）が
-        // 無くてもクラッシュしないよう、読み込み時に補完する
-        const normalized: MaterialEntry[] = (Array.isArray(parsed) ? parsed : []).map((e: any) => ({
-          id: e?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          addedAt: e?.addedAt || new Date().toISOString(),
-          label: e?.label || "",
-          preview: e?.preview || "",
-          text: e?.text || e?.preview || "",
-          vocabulary: Array.isArray(e?.vocabulary) ? e.vocabulary : [],
-          grammarPoints: Array.isArray(e?.grammarPoints) ? e.grammarPoints : [],
-          exercises: (Array.isArray(e?.exercises) ? e.exercises : []).map((ex: any) => ({
-            prompt: ex?.prompt || "",
-            groupTitle: ex?.groupTitle || "",
-            answer: ex?.answer || "",
-            explanation_ja: ex?.explanation_ja || "",
-            qtype: ex?.qtype === "choice" ? "choice" : "text",
-            choices: Array.isArray(ex?.choices) ? ex.choices : [],
-          })),
-        }));
-        setVocabBank(normalized);
+        localBank = normalizeMaterialEntries(JSON.parse(savedBank));
+        // まずローカルのデータを即座に表示（オフラインでもすぐ使えるように）
+        setVocabBank(localBank);
       }
     } catch {}
+
+    // 家族共有バンク（サーバー側）を取得し、あれば優先して使う。
+    // 共有機能が未設定（Vercel KV未接続）の場合はエラーになるが、その場合は
+    // 何もせずローカルのデータのまま使う（動作に支障は無い）
+    fetch("/api/bank")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const sharedBank = normalizeMaterialEntries(data.bank);
+        if (sharedBank.length > 0) {
+          setVocabBank(sharedBank);
+          localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(sharedBank));
+        } else if (localBank.length > 0) {
+          // 共有バンクがまだ空で、この端末にだけデータがある場合は
+          // 初回の移行として共有バンクにアップロードしておく
+          fetch("/api/bank", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bank: localBank }),
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
     setSpeechSupported(typeof window !== "undefined" && "speechSynthesis" in window);
     setMicSupported(
       typeof window !== "undefined" &&
@@ -188,6 +219,29 @@ export default function FrenchPracticePage() {
   function saveBank(next: MaterialEntry[]) {
     setVocabBank(next);
     localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(next));
+    // 家族共有バンクにも保存する（失敗してもローカルには保存済みなので致命的ではない）
+    fetch("/api/bank", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bank: next }),
+    }).catch(() => {});
+  }
+
+  // 他の家族が追加した最新の教材を取得する（ページを開いたままでも手動更新できるように）
+  async function refreshSharedBank() {
+    setBankSyncing(true);
+    try {
+      const res = await fetch("/api/bank");
+      if (!res.ok) return;
+      const data = await res.json();
+      const sharedBank = normalizeMaterialEntries(data.bank);
+      setVocabBank(sharedBank);
+      localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(sharedBank));
+    } catch {
+      // 失敗した場合は何もしない（今表示しているデータのまま）
+    } finally {
+      setBankSyncing(false);
+    }
   }
 
   // 個別に呼び出し、失敗したものは空扱いにして他の結果は保存する
@@ -1133,10 +1187,20 @@ export default function FrenchPracticePage() {
         <section className="card mt-4 p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xl font-bold">📚 蓄積ボキャブラリーバンク</h2>
-            <span className="text-sm text-stone-500">単語・表現 {totalVocabCount} 件蓄積中</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-stone-500">単語・表現 {totalVocabCount} 件蓄積中</span>
+              <button
+                className="text-xs text-stone-500 underline disabled:opacity-50"
+                onClick={refreshSharedBank}
+                disabled={bankSyncing}
+                title="他の家族が追加した最新の教材を取得します"
+              >
+                {bankSyncing ? "更新中..." : "🔄 最新のデータを取得"}
+              </button>
+            </div>
           </div>
           <p className="mt-1 text-sm text-stone-600">
-            これまでにアップロードした教材から集めた語彙です。会話中にレベルに合わせて自然に復習として登場します。
+            これまでにアップロードした教材から集めた語彙です。会話中にレベルに合わせて自然に復習として登場します。家族で同じURLを開けば、教材は自動的に共有されます。
           </p>
 
           <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-2">
