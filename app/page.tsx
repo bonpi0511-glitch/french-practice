@@ -142,6 +142,10 @@ export default function FrenchPracticePage() {
   const [hideUserMessages, setHideUserMessages] = useState(false);
   const [activeSourceText, setActiveSourceText] = useState("");
   const [activeMaterialLabel, setActiveMaterialLabel] = useState("");
+  // 会話中の教材がボキャブラリーバンクのどのエントリーに対応するか（文法解説・設問の
+  // 表示を、今話している教材だけに絞り込むために使う）。バンクに無い手入力テキストの
+  // 場合は空文字のままにする。
+  const [activeMaterialId, setActiveMaterialId] = useState("");
   // 会話中の話者ラベル（例:「L'employé」「La cliente」）。AIの最初の応答で決まる
   const [aiRoleLabel, setAiRoleLabel] = useState("");
   const [userRoleLabel, setUserRoleLabel] = useState("");
@@ -328,12 +332,14 @@ export default function FrenchPracticePage() {
     return seen.size;
   }, [vocabBank]);
 
-  // Most recent materials first, deduped by grammar point title.
-  const accumulatedGrammar = useMemo(() => {
+  // 複数教材（entries）から、文法解説を新しいものから並べて重複除去でまとめる。
+  // 会話中の全体復習用（accumulatedGrammar）にも、特定の1教材だけに絞った
+  // 表示用（displayedGrammarPoints）にも、この共通ロジックを使う。
+  function buildGrammarPoints(entries: MaterialEntry[]): GrammarPoint[] {
     const seen = new Set<string>();
     const out: GrammarPoint[] = [];
-    for (let i = vocabBank.length - 1; i >= 0; i--) {
-      for (const g of vocabBank[i].grammarPoints) {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      for (const g of entries[i].grammarPoints) {
         const key = g.title.trim().toLowerCase();
         if (!key || seen.has(key)) continue;
         seen.add(key);
@@ -341,7 +347,10 @@ export default function FrenchPracticePage() {
       }
     }
     return out.slice(0, 20);
-  }, [vocabBank]);
+  }
+
+  // Most recent materials first, deduped by grammar point title.
+  const accumulatedGrammar = useMemo(() => buildGrammarPoints(vocabBank), [vocabBank]);
 
   // OCR/AIが生成した文字列は、同じ大問の指示文でも小問ごとに全角/半角スペースや
   // 引用符の種類（« » と " など）が微妙に揺れることがあるため、比較・接頭辞の
@@ -382,13 +391,16 @@ export default function FrenchPracticePage() {
   type ExerciseListItem = { key: string; item: ExerciseItem; itemText: string };
   type ExerciseGroup = { groupKey: string; groupTitle: string; materialLabel: string; items: ExerciseListItem[] };
 
-  const accumulatedExerciseGroups = useMemo(() => {
+  // 複数教材（entries）から設問グループを組み立てる共通ロジック。
+  // 会話中の全体復習用（accumulatedExerciseGroups）にも、特定の1教材だけに
+  // 絞った表示用（displayedExerciseGroups）にも使う。
+  function buildExerciseGroups(entries: MaterialEntry[]): ExerciseGroup[] {
     const groups: ExerciseGroup[] = [];
     let currentGroup: ExerciseGroup | null = null;
     let totalItems = 0;
 
-    for (let i = vocabBank.length - 1; i >= 0 && totalItems < 30; i--) {
-      const entry = vocabBank[i];
+    for (let i = entries.length - 1; i >= 0 && totalItems < 30; i--) {
+      const entry = entries[i];
       currentGroup = null; // 教材が変わったら新しいカードから始める
       for (let idx = 0; idx < entry.exercises.length && totalItems < 30; idx++) {
         const item = entry.exercises[idx];
@@ -407,7 +419,32 @@ export default function FrenchPracticePage() {
       }
     }
     return groups;
-  }, [vocabBank]);
+  }
+
+  const accumulatedExerciseGroups = useMemo(() => buildExerciseGroups(vocabBank), [vocabBank]);
+
+  // 会話中の教材（activeMaterialId）に対応するボキャブラリーバンクのエントリー。
+  // 手入力テキストなど、バンクに存在しない教材の場合は undefined になる。
+  const activeMaterialEntry = useMemo(
+    () => vocabBank.find((e) => e.id === activeMaterialId),
+    [vocabBank, activeMaterialId]
+  );
+
+  // 文法解説・設問の「表示用」データ。会話中の教材がバンクの1エントリーに
+  // 対応している場合は、その教材だけの内容に絞り込んで表示する（他の教材の
+  // 文法解説・設問が混ざらないようにする）。対応する教材が無い場合（会話開始前や、
+  // 手入力テキストで会話している場合）は、これまで通り全教材の蓄積分を表示する。
+  // ※ accumulatedVocab / accumulatedGrammar（AIへ渡す復習用データ）は、
+  //   教材横断のスペースドリピティションのために意図的に全体のままにしてあり、
+  //   ここでは変更しない。
+  const displayedGrammarPoints = useMemo(
+    () => (activeMaterialEntry ? buildGrammarPoints([activeMaterialEntry]) : accumulatedGrammar),
+    [activeMaterialEntry, accumulatedGrammar]
+  );
+  const displayedExerciseGroups = useMemo(
+    () => (activeMaterialEntry ? buildExerciseGroups([activeMaterialEntry]) : accumulatedExerciseGroups),
+    [activeMaterialEntry, accumulatedExerciseGroups]
+  );
 
   function toggleExerciseAnswer(key: string) {
     setRevealedExercises((prev) => {
@@ -657,14 +694,14 @@ export default function FrenchPracticePage() {
     window.speechSynthesis.speak(utter);
   }
 
-  function pickTopicText(): { text: string; label: string } | null {
+  function pickTopicText(): { text: string; label: string; id: string } | null {
     if (topicMode === "random") {
       if (!vocabBank.length) {
         alert("ランダムモードを使うには、先に教材を1つ以上アップロード（またはボキャブラリーバンクに保存）してください");
         return null;
       }
       const pick = vocabBank[Math.floor(Math.random() * vocabBank.length)];
-      return { text: pick.text, label: pick.label };
+      return { text: pick.text, label: pick.label, id: pick.id };
     }
     if (topicMode === "pick") {
       const picked = vocabBank.find((e) => e.id === selectedMaterialId);
@@ -672,21 +709,22 @@ export default function FrenchPracticePage() {
         alert("蓄積した教材の中から使うものを選んでください");
         return null;
       }
-      return { text: picked.text, label: picked.label };
+      return { text: picked.text, label: picked.label, id: picked.id };
     }
     if (!sourceText.trim()) {
       alert("テキストを貼り付けるか、テキストファイルをアップロードしてください");
       return null;
     }
-    return { text: sourceText, label: fileName || "手入力テキスト" };
+    return { text: sourceText, label: fileName || "手入力テキスト", id: "" };
   }
 
-  async function startConversation(explicitTopic?: { text: string; label: string }) {
+  async function startConversation(explicitTopic?: { text: string; label: string; id?: string }) {
     const topic = explicitTopic || pickTopicText();
     if (!topic) return;
     if (!explicitTopic && topicMode === "single") localStorage.setItem(STORAGE_KEY, sourceText);
     setActiveSourceText(topic.text);
     setActiveMaterialLabel(topic.label);
+    setActiveMaterialId(topic.id || "");
     setError("");
     setMessages([]);
     setAiRoleLabel("");
@@ -1249,7 +1287,7 @@ export default function FrenchPracticePage() {
                         onClick={() => {
                           setTopicMode("pick");
                           setSelectedMaterialId(entry.id);
-                          startConversation({ text: entry.text, label: entry.label });
+                          startConversation({ text: entry.text, label: entry.label, id: entry.id });
                         }}
                       >
                         この教材で話す
@@ -1284,15 +1322,18 @@ export default function FrenchPracticePage() {
         </section>
       )}
 
-      {accumulatedGrammar.length > 0 && (
+      {displayedGrammarPoints.length > 0 && (
         <section className="card mt-4 p-5">
           <h2 className="text-xl font-bold">📖 文法解説（日本語）</h2>
           <p className="mt-1 text-sm text-stone-600">
-            アップロードした教材の文法解説欄（Grammaire など）を、AIが日本語でわかりやすく解説したものです。会話中の添削もこの内容を踏まえて説明されます。
+            {activeMaterialEntry
+              ? `「${activeMaterialEntry.label}」の文法解説欄（Grammaire など）を、AIが日本語でわかりやすく解説したものです。`
+              : "アップロードした教材の文法解説欄（Grammaire など）を、AIが日本語でわかりやすく解説したものです。"}
+            会話中の添削もこの内容を踏まえて説明されます。
           </p>
 
           <div className="mt-3 space-y-3">
-            {accumulatedGrammar.map((g, i) => (
+            {displayedGrammarPoints.map((g, i) => (
               <div key={i} className="rounded-xl border border-stone-200 bg-white p-3">
                 <div className="text-sm font-bold text-stone-800">{g.title}</div>
                 <p className="mt-1 text-sm text-stone-700">{g.explanation_ja}</p>
@@ -1309,15 +1350,18 @@ export default function FrenchPracticePage() {
         </section>
       )}
 
-      {accumulatedExerciseGroups.length > 0 && (
+      {displayedExerciseGroups.length > 0 && (
         <section className="card mt-4 p-5">
           <h2 className="text-xl font-bold">📝 設問（練習問題）</h2>
           <p className="mt-1 text-sm text-stone-600">
-            教材に含まれていた練習問題（穴埋め・正誤問題など）です。回答してから「採点する」を押すか、「答えを見る」で正解を確認しましょう。
+            {activeMaterialEntry
+              ? `「${activeMaterialEntry.label}」に含まれていた練習問題（穴埋め・正誤問題など）です。`
+              : "教材に含まれていた練習問題（穴埋め・正誤問題など）です。"}
+            回答してから「採点する」を押すか、「答えを見る」で正解を確認しましょう。
           </p>
 
           <div className="mt-3 space-y-4">
-            {accumulatedExerciseGroups.map((group, gi) => (
+            {displayedExerciseGroups.map((group, gi) => (
               <div key={group.groupKey} className="overflow-hidden rounded-xl border border-stone-200 bg-white">
                 <div className="flex items-start gap-2 bg-stone-50 px-3 py-2">
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-700 text-[11px] font-bold text-white">
