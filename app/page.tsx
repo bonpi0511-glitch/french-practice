@@ -164,6 +164,9 @@ export default function FrenchPracticePage() {
   const [voiceError, setVoiceError] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // 入力欄の内容が「直前の音声認識の結果のまま」かどうか。
+  // trueのまま再度音声入力すると、前回の（不十分だった）認識結果を残さず置き換える
+  const inputIsFromVoiceRef = useRef(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -743,6 +746,7 @@ export default function FrenchPracticePage() {
     if (!text || loading) return;
     setError("");
     setInput("");
+    inputIsFromVoiceRef.current = false;
     setSuggestion(null);
     const priorHistory = historyForApi();
     const userMsg: Message = { role: "user", french: text, correction: null, correctionNote: null };
@@ -856,7 +860,13 @@ export default function FrenchPracticePage() {
       const res = await fetch("/api/transcribe", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "音声の文字起こしに失敗しました");
-      setInput((prev) => (prev ? `${prev} ${data.text}`.trim() : data.text));
+      setInput((prev) => {
+        // 入力欄が前回の音声認識結果のままなら、それを残さず新しい結果で置き換える
+        // （手入力や送信を挟んでいれば、これまで通り末尾に追加する）
+        if (inputIsFromVoiceRef.current) return data.text;
+        return prev ? `${prev} ${data.text}`.trim() : data.text;
+      });
+      inputIsFromVoiceRef.current = true;
     } catch (e: any) {
       setVoiceError(e.message);
     } finally {
@@ -1135,7 +1145,10 @@ export default function FrenchPracticePage() {
                   )}
                   <button
                     className="shrink-0 text-emerald-700 underline"
-                    onClick={() => setInput(suggestion.fr)}
+                    onClick={() => {
+                      inputIsFromVoiceRef.current = false;
+                      setInput(suggestion.fr);
+                    }}
                   >
                     入力欄に使う
                   </button>
@@ -1181,7 +1194,11 @@ export default function FrenchPracticePage() {
               placeholder="フランス語で返信してみましょう（マイクでも入力できます）"
               value={input}
               disabled={loading}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                // 手で編集したら、以後の音声入力は追加扱いにする（置き換えない）
+                inputIsFromVoiceRef.current = false;
+                setInput(e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") sendMessage();
               }}
