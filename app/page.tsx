@@ -246,7 +246,7 @@ export default function FrenchPracticePage() {
 
   // 個別に呼び出し、失敗したものは空扱いにして他の結果は保存する
   async function extractPart<T>(path: string, text: string, key: string, fallbackErrorLabel: string): Promise<{ data: T[]; error: string | null }> {
-    try {
+    const attempt = async (): Promise<{ data: T[]; error: string | null }> => {
       const res = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -255,8 +255,18 @@ export default function FrenchPracticePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || fallbackErrorLabel);
       return { data: (data[key] as T[]) || [], error: null };
-    } catch (e: any) {
-      return { data: [], error: `${fallbackErrorLabel}: ${e.message}` };
+    };
+    try {
+      return await attempt();
+    } catch {
+      // 「Load failed」のような一時的な通信エラーの可能性があるため、
+      // 少し待ってからもう一度だけ試す
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        return await attempt();
+      } catch (e2: any) {
+        return { data: [], error: `${fallbackErrorLabel}: ${e2.message}` };
+      }
     }
   }
 
