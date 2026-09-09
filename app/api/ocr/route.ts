@@ -92,18 +92,56 @@ JSON のみで返してください: {"text":"書き起こしたフランス語�
 - 【重要】1つの大問が左右2列（2カラム）に分かれてレイアウトされていることがよくある（例: 左列に 1〜5、右列に 6〜10 が並ぶ）。この場合、左右の見た目の位置に惑わされず、まず左列を1番から番号順に最後まで書き写し、そのあとで右列を続きの番号から書き写すこと。左右の列を交互に読んだり、列を混同したりしない。
 - 各小問の番号（1, 2, 3...）は、写真に印刷されている番号を絶対にそのまま使う。番号を書き間違えたり、他の小問の番号と混同したり、勝手に振り直したりしない。書き写した後、印刷されている番号の並び（1,2,3,4,5,6,7,8,9,10 のように連番になっているか）と、自分が書いた番号が一致しているか必ず見直す。
 - 【重要】「Entourez les bonnes réponses.」「Cochez.」のように、単語やフレーズのリストの中から正しいものを選ぶ形式の設問では、その候補リスト（例:「un croissant, une fleur, des bonbons, une baguette, ...」）を1語も省略せず、区切りのカンマも含めてそのまま書き写す。このリストが無いと設問に答えられなくなるため、絶対に省略しない。
-- 【重要】「Complétez le dialogue suivant.」のような対話形式の穴埋めでは、対話の各セリフ（話者の記号「—」や「-」も含む）と、番号付きの空欄をすべて、抜けなく順番通りに書き写す。空欄の数（1, 2, 3...）が対話の行数と対応しているか、書き終えた後に必ず見直す。特に「1.」の最初のセリフ・空欄は、指示文のすぐ次に来るため見落としやすい。指示文の直後に来る1番目の項目も省略せず、必ず書き写す。
+- 「Complétez le dialogue suivant.」のような、対話文の中のセリフを埋める形式の設問は、このタスクでは書き起こさなくてよい（別のタスクで専門に扱うため）。
 - 文字が読み取りにくい・不鮮明な箇所があれば、無理に埋めず [判読不能] と書く。
 
 書き終えたら、(1) 写真に写っている大問の数と、書き起こしたテキスト中の大問の数が一致しているか、(2) 各大問内の小問の番号が印刷されている番号・順序と完全に一致しているか、の両方を必ず見直してから出力してください（練習問題欄が写真に無い場合のみ text を空文字にする）。
 JSON のみで返してください: {"text":"書き起こした練習問題のテキスト"}`;
 
-    const [mainText, exercisesText] = await Promise.all([
+    // 「Complétez le dialogue suivant.」のような対話穴埋め問題は、他の設問と一緒に
+    // 書き起こさせると空欄を見落とし・数え間違いしやすい（何度も再発した）ため、
+    // これだけに専念する専用の呼び出しを別に用意する。
+    const dialogueInstruction = `これはフランス語学習用テキスト（教科書のページなど）の写真です。これはOCR（文字起こし）タスクです。
+
+あなたの仕事はただ1つです: 写真の中に「Complétez le dialogue suivant.」のような、**対話文の中のセリフ（返答）を埋める形式の設問**があれば、それだけを一字一句正確に書き写すこと。無ければ何もせず text を空文字にする。他の設問（穴埋め・正誤問題・選択問題など）や、会話文・語彙リスト・文法解説は絶対に書き起こさないこと。
+
+この形式の設問は、番号付きの「決まっているセリフ」と、番号の付いていない「空欄（___）」が交互に並ぶ構成になっていることが多い。空欄を、セリフと同じ連番に混ぜて振り直したり、空欄そのものを省略したりしないこと。以下に具体例を示す。
+
+（元のレイアウト。1〜4は決まっているセリフの番号。各セリフの下に、番号の付いていない空欄が1つずつある）
+1. — Monsieur ?
+— ___________
+2. — Oui, monsieur. Voilà deux croissants. Et avec ceci ?
+— ___________
+3. — Nous avons des petites tartes aux pommes, aux framboises, au citron...
+— ___________
+4. — Voilà, monsieur, deux petites tartes au citron.
+
+（正しい書き写し方 — セリフの番号（1〜4）はそのまま使い、各空欄はセリフの次の行に、番号を付けずにそのまま書く。空欄は全部で3つになる）
+1. — Monsieur ?
+— ___________
+2. — Oui, monsieur. Voilà deux croissants. Et avec ceci ?
+— ___________
+3. — Nous avons des petites tartes aux pommes, aux framboises, au citron...
+— ___________
+4. — Voilà, monsieur, deux petites tartes au citron.
+
+（絶対にやってはいけない間違った書き写し方 — 空欄をセリフと同じ連番に混ぜてしまい、本来3つあるはずの空欄が1つに減っている。このような出力は不正解）
+1. — Monsieur ?
+2. — Oui, monsieur. Voilà deux croissants. Et avec ceci ?
+3. — ___________
+4. — Nous avons des petites tartes aux pommes, aux framboises, au citron...
+5. — Voilà, monsieur, deux petites tartes au citron.
+
+書き終えたら、決まっているセリフの数と、空欄（___）の数をそれぞれ別々に数え、写真に印刷されている数と一致しているか必ず見直してから出力すること。大問の指示文（例:「5 Complétez le dialogue suivant.」）も先頭に含める。
+JSON のみで返してください: {"text":"書き起こした対話穴埋め問題のテキスト（無ければ空文字）"}`;
+
+    const [mainText, exercisesText, dialogueText] = await Promise.all([
       transcribe(mainInstruction, 4000),
       transcribe(exercisesInstruction, 8000),
+      transcribe(dialogueInstruction, 3000),
     ]);
 
-    const combined = [mainText.trim(), exercisesText.trim()].filter(Boolean).join("\n\n");
+    const combined = [mainText.trim(), exercisesText.trim(), dialogueText.trim()].filter(Boolean).join("\n\n");
     return NextResponse.json({ text: combined });
   } catch (e: any) {
     const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
