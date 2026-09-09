@@ -42,6 +42,186 @@ function getTextFromResponse(response: any): string {
     .join("");
 }
 
+type OutExercise = {
+  prompt: string;
+  groupTitle: string;
+  answer: string;
+  explanation_ja: string;
+  qtype: "choice" | "multi" | "text";
+  choices: string[];
+};
+
+// 「Complétez le dialogue ...」のような対話穴埋め問題は、AIによる自由な抽出だと
+// 空欄を見落としがち（何度プロンプトを調整しても再発した）なので、最後の砦として
+// 正規表現で機械的に空欄を数え上げ、AIの結果が足りない場合はここで補う。
+const DIALOGUE_INSTRUCTION_RE = /complétez.{0,20}dialogue/i;
+const NEW_BIG_QUESTION_RE =
+  /^\s*\d+\s*[.\)]?\s*(entourez|cochez|répondez|reliez|complétez|associez|choisissez|vrai|faux)/i;
+const BLANK_LINE_RE = /^\s*\d*\.?\s*[—–\-]?\s*_{2,}\s*$/;
+
+type DialogueGroup = { groupTitle: string; items: { prompt: string }[] };
+
+function extractDialogueBlanks(text: string): DialogueGroup[] {
+  const lines = text.split(/\r?\n/);
+  const groups: DialogueGroup[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (DIALOGUE_INSTRUCTION_RE.test(lines[i])) {
+      const instructionLine = lines[i].trim();
+      const blockLines: string[] = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        if (NEW_BIG_QUESTION_RE.test(lines[j]) && !DIALOGUE_INSTRUCTION_RE.test(lines[j])) break;
+        blockLines.push(lines[j]);
+        j++;
+      }
+      const items: { prompt: string }[] = [];
+      for (let k = 0; k < blockLines.length; k++) {
+        if (!BLANK_LINE_RE.test(blockLines[k])) continue;
+        let ctx = "";
+        for (let m = k - 1; m >= 0; m--) {
+          const cand = blockLines[m].trim();
+          if (cand && !BLANK_LINE_RE.test(blockLines[m])) {
+            ctx = cand;
+            break;
+          }
+        }
+        const blankText = blockLines[k].trim();
+        items.push({ prompt: ctx ? `${ctx}\n${blankText}` : blankText });
+      }
+      if (items.length > 0) groups.push({ groupTitle: instructionLine, items });
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return groups;
+}
+
+function normLine(s: string) {
+  // 先頭の番号（「2. 」など）は、AI側のpromptに含まれていたり
+  // いなかったりして表記が揺れるため、比較の前に取り除く
+  return s
+    .replace(/^\s*\d+\.\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+// AIの抽出結果に、正規表現で見つけた対話穴埋めの構造を補強する。
+// AIの方が既に全部見つけている場合は何もしない（正規表現の検出漏れで
+// 逆に壊さないため、「正規表現の件数 > AIの件数」のときだけ差し替える）。
+function reinforceDialogueBlanks(
+  exercises: OutExercise[],
+  rawText: string
+): { merged: OutExercise[]; needsAnswer: number[] } {
+  const groups = extractDialogueBlanks(rawText);
+  if (groups.length === 0) return { merged: exercises, needsAnswer: [] };
+
+  let merged = exercises.slice();
+
+  groups.forEach((group) => {
+    const aiIdxs: number[] = [];
+    merged.forEach((ex, idx) => {
+      if (DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) aiIdxs.push(idx);
+    });
+    if (group.items.length <= aiIdxs.length) return;
+
+    // 答え・解説を流用できるように、AI項目を「文脈の1行目」で引けるようにしておく
+    const answerByContext: Record<string, { answer: string; explanation_ja: string }> = {};
+    aiIdxs.forEach((idx) => {
+      const firstLine = normLine((merged[idx].prompt || "").split("\n")[0] || "");
+      if (firstLine) answerByContext[firstLine] = { answer: merged[idx].answer, explanation_ja: merged[idx].explanation_ja };
+    });
+
+    const newItems: OutExercise[] = group.items.map((gi) => {
+      const firstLine = normLine(gi.prompt.split("\n")[0] || "");
+      const borrowed = answerByContext[firstLine];
+      return {
+        prompt: gi.prompt,
+        groupTitle: group.groupTitle,
+        answer: borrowed?.answer || "",
+        explanation_ja: borrowed?.explanation_ja || "",
+        qtype: "text",
+        choices: [],
+      };
+    });
+
+    const withoutOld = merged.filter((_, idx) => aiIdxs.indexOf(idx) === -1);
+    const insertAt = aiIdxs.length > 0 ? aiIdxs[0] - aiIdxs.filter((idx) => idx < aiIdxs[0]).length : withoutOld.length;
+    merged = withoutOld.slice(0, insertAt).concat(newItems, withoutOld.slice(insertAt));
+  });
+
+  const needsAnswer: number[] = [];
+  merged.forEach((ex, idx) => {
+    if (!ex.answer && DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) needsAnswer.push(idx);
+  });
+  return { merged, needsAnswer };
+}
+
+// 正規表現で補った空欄のうち、AIの結果から答えを流用できなかったものだけ、
+// 追加でAIに答えだけを埋めてもらう（対象が絞られた小さな依頼なので、
+// 通常の抽出より確実にこなせる）。
+async function fillMissingAnswers(
+  client: OpenAI,
+  model: string,
+  merged: OutExercise[],
+  needsAnswer: number[],
+  sourceText: string
+): Promise<OutExercise[]> {
+  if (needsAnswer.length === 0) return merged;
+
+  const FillItem = z.object({ index: z.number(), answer: stringish, explanation_ja: stringish });
+  const FillResult = z.object({ answers: z.array(FillItem).default([]) });
+
+  const list = needsAnswer
+    .map((idx, i) => `${i}: ${merged[idx].prompt.replace(/\n/g, " / ")}`)
+    .join("\n");
+
+  try {
+    const response = await client.responses.create({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `以下は、フランス語教材の対話文の穴埋め問題の一部です。教材本文を参考に、それぞれの空欄に入る自然なフランス語の返答（正解）と、日本語での短い解説を考えてください。
+
+設問一覧（"index: 文脈 / — ___"の形式）:
+${list}
+
+教材本文:
+"""
+${sourceText.slice(0, 20000)}
+"""
+
+JSONのみで返してください: {"answers":[{"index":0,"answer":"","explanation_ja":""}]}`,
+            },
+          ],
+        },
+      ],
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 2000,
+      temperature: 0.3,
+    });
+    const text = getTextFromResponse(response);
+    const parsed = FillResult.parse(JSON.parse(text));
+    const result = merged.slice();
+    parsed.answers.forEach((a) => {
+      const targetIdx = needsAnswer[a.index];
+      if (targetIdx !== undefined && result[targetIdx]) {
+        result[targetIdx] = { ...result[targetIdx], answer: a.answer, explanation_ja: a.explanation_ja };
+      }
+    });
+    return result;
+  } catch {
+    // 失敗しても致命的ではない（設問自体は表示される。答えが空欄のままになるだけ）
+    return merged;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -107,7 +287,7 @@ ${body.text.slice(0, 20000)}
     const text = getTextFromResponse(response);
     const parsed = Extraction.parse(JSON.parse(text));
     // クライアント側の型（groupTitle）に合わせて変換して返す
-    const exercises = parsed.exercises.map((ex) => ({
+    const rawExercises: OutExercise[] = parsed.exercises.map((ex) => ({
       prompt: ex.prompt,
       groupTitle: ex.group_title,
       answer: ex.answer,
@@ -115,6 +295,13 @@ ${body.text.slice(0, 20000)}
       qtype: ex.qtype,
       choices: ex.choices,
     }));
+
+    // 対話穴埋め問題は、AIの抽出結果が実際の空欄数より少ない場合、正規表現の
+    // 検出結果で補強する（何度プロンプトを調整しても再発した問題への保険）
+    const model = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1";
+    const { merged, needsAnswer } = reinforceDialogueBlanks(rawExercises, body.text);
+    const exercises = await fillMissingAnswers(client, model, merged, needsAnswer, body.text);
+
     return NextResponse.json({ exercises });
   } catch (e: any) {
     const detail = { status: (e as any)?.status, code: (e as any)?.code, type: (e as any)?.type, param: (e as any)?.param };
