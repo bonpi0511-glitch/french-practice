@@ -56,6 +56,10 @@ export async function POST(req: NextRequest) {
 
 教材には、1つの大問（例:「2 Complétez par « un », « une », « des ».」）の下に複数の小問（1. ___ baguette / 2. ___ glace / ...）がぶら下がっている構成がよくあります。この場合、小問1つ1つを別々の設問として抽出しつつ、それぞれの prompt の先頭に、その小問が属する大問の指示文（何を答えればよいかの説明）を必ず含めてください。小問の番号や文だけを見ても何をすればよいか分からない状態にしないでください。
 
+特に注意が必要な2つの形式:
+1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: この候補リストは選択肢であり、答えを選ぶために絶対に必要な情報なので、省略せず prompt の末尾にそのまま全部含めること（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses. un croissant, une fleur, des bonbons, une baguette, ...」）。正解が複数ある場合、answer にはそのリストの中の正しい項目だけを「、」区切りで全部含める。qtype は "text" にする（choices は使わない。リストは prompt 側に含めているため）。
+2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中に番号付きの空欄（1. — ... / — ___ / 2. — ... のように）が複数ある場合、空欄1つにつき1つの設問として必ず全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の直前のセリフ（1〜2行程度）だけを最小限の文脈として含めれば十分で、それより前のやりとり全体を毎回繰り返して含めないこと（例えば3番目の空欄の prompt に1番目・2番目のやりとりまで丸ごと含めるのは誤り。2番目の空欄までの短いやり取りだけで十分）。
+
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
 - group_title: prompt の先頭に含めた「大問の指示文」の部分だけを、そのまま入れる（例:「Complétez par « un », « une » ou « des ».」「Relisez le dialogue ci-contre. Vrai ou faux ?」）。同じ大問に属する小問は、すべて同じ group_title（一字一句同じ文字列）にすること。大問に属さない独立した設問の場合は空文字にする。
