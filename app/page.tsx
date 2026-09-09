@@ -956,7 +956,7 @@ export default function FrenchPracticePage() {
         />
         <div className="mt-2">
           <button
-            className="btn btn-secondary text-xs"
+            className="btn btn-secondary text-sm px-5 py-2"
             disabled={bankLoading || !sourceText.trim()}
             onClick={() => addToVocabBank(sourceText, extractTitleFromText(sourceText) || "手入力テキスト")}
           >
@@ -1144,7 +1144,7 @@ export default function FrenchPracticePage() {
                     <div className="mb-0.5 text-[11px] font-semibold text-stone-400">{userRoleLabel}</div>
                   )}
                   {!hideUserMessages && (
-                    <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#1c2b4a] px-4 py-2 text-sm text-white">
+                    <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[var(--accent)] px-4 py-2 text-sm text-white">
                       {m.french}
                     </div>
                   )}
@@ -1195,7 +1195,7 @@ export default function FrenchPracticePage() {
             )}
             {!hideUserMessages && !loading && input.trim() && (
               <div className="flex flex-col items-end">
-                <div className="max-w-[85%] rounded-2xl rounded-tr-sm border-2 border-dashed border-[#1c2b4a] bg-white px-4 py-2 text-sm text-[#1c2b4a] opacity-70">
+                <div className="max-w-[85%] rounded-2xl rounded-tr-sm border-2 border-dashed border-[var(--accent)] bg-white px-4 py-2 text-sm text-[var(--accent)] opacity-70">
                   {input}
                 </div>
                 <span className="mt-1 text-xs text-stone-400">送信前のプレビュー</span>
@@ -1283,7 +1283,7 @@ export default function FrenchPracticePage() {
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <button
-                        className="text-xs text-[#1c2b4a] underline"
+                        className="text-sm font-bold text-[var(--accent)] underline"
                         onClick={() => {
                           setTopicMode("pick");
                           setSelectedMaterialId(entry.id);
@@ -1364,7 +1364,7 @@ export default function FrenchPracticePage() {
             {displayedExerciseGroups.map((group, gi) => (
               <div key={group.groupKey} className="overflow-hidden rounded-xl border border-stone-200 bg-white">
                 <div className="flex items-start gap-2 bg-stone-50 px-3 py-2">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-700 text-[11px] font-bold text-white">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-bold text-white">
                     {gi + 1}
                   </span>
                   <div className="min-w-0">
@@ -1392,10 +1392,8 @@ export default function FrenchPracticePage() {
                                   key={choice}
                                   type="button"
                                   onClick={() => setExerciseAnswer(key, choice)}
-                                  className={`rounded-lg border px-3 py-1.5 text-xs ${
-                                    exerciseAnswers[key] === choice
-                                      ? "border-[#1c2b4a] bg-[#1c2b4a] text-white"
-                                      : "border-stone-300 bg-white text-stone-700"
+                                  className={`choice-btn ${
+                                    exerciseAnswers[key] === choice ? "choice-btn-selected" : ""
                                   }`}
                                 >
                                   {choice}
@@ -1414,13 +1412,16 @@ export default function FrenchPracticePage() {
 
                           <div className="flex flex-wrap gap-2">
                             <button
-                              className="btn btn-primary text-xs"
+                              className="btn btn-primary text-sm px-5 py-2"
                               disabled={!(exerciseAnswers[key] || "").trim()}
                               onClick={() => checkExercise(key)}
                             >
                               採点する
                             </button>
-                            <button className="btn btn-secondary text-xs" onClick={() => toggleExerciseAnswer(key)}>
+                            <button
+                              className="btn btn-secondary text-sm px-5 py-2"
+                              onClick={() => toggleExerciseAnswer(key)}
+                            >
                               {revealed ? "答えを隠す" : "答えを見る"}
                             </button>
                           </div>
@@ -1431,14 +1432,14 @@ export default function FrenchPracticePage() {
                             <div className={`font-bold ${correct ? "text-emerald-700" : "text-rose-700"}`}>
                               {correct ? "✅ 正解！" : "❌ 不正解"}
                             </div>
-                            <div className="mt-1 font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                            <div className="mt-1 font-bold text-[var(--accent)]">正解: {item.answer}</div>
                             <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
                           </div>
                         )}
 
                         {revealed && (
                           <div className="mt-2 rounded-lg bg-stone-50 p-2 text-sm">
-                            <div className="font-bold text-[#1c2b4a]">正解: {item.answer}</div>
+                            <div className="font-bold text-[var(--accent)]">正解: {item.answer}</div>
                             <p className="mt-1 text-stone-600">{item.explanation_ja}</p>
                           </div>
                         )}
