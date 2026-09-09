@@ -111,10 +111,13 @@ function extractDialogueBlanks(text: string): DialogueGroup[] {
 }
 
 function normLine(s: string) {
-  // 先頭の番号（「2. 」など）は、AI側のpromptに含まれていたり
-  // いなかったりして表記が揺れるため、比較の前に取り除く
+  // 先頭の番号（「2. 」「2 」のように、ピリオドが付く場合と付かない場合の
+  // どちらも表記ゆれとして起こる）は、比較の前に取り除く。
+  // ピリオドを必須にすると「5 Complétez...」のようにピリオドの無い書き方を
+  // 取りこぼし、同じ大問なのに別グループとして扱われてしまうため、
+  // ピリオドは任意（?）にしてある。
   return s
-    .replace(/^\s*\d+\.\s*/, "")
+    .replace(/^\s*\d+\.?\s*/, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -128,7 +131,7 @@ function normLine(s: string) {
 function dialogueContentKey(prompt: string): string {
   return prompt
     .replace(/[—–\-]?\s*_{2,}/g, "")
-    .replace(/^\s*\d+\.\s*/gm, "")
+    .replace(/^\s*\d+\.?\s*/gm, "")
     .replace(/[—–\-]/g, "")
     .replace(/\s+/g, " ")
     .trim()
