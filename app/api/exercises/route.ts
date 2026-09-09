@@ -108,6 +108,42 @@ function normLine(s: string) {
     .toLowerCase();
 }
 
+// 対話穴埋めの空欄は、専用のOCR呼び出しと通常のOCR呼び出しの両方が
+// （除外の指示にもかかわらず）拾ってしまうことがあり、その場合、同じ空欄が
+// 表記違い（番号の有無・空欄をセリフと同じ行に書くか別行にするか等）で
+// 重複して抽出されることがある。空欄マーカーや番号・記号を取り除いた
+// 「セリフ本文」だけを比較キーにすることで、表記が違っても同じ空欄だと判定する。
+function dialogueContentKey(prompt: string): string {
+  return prompt
+    .replace(/[—–\-]?\s*_{2,}/g, "")
+    .replace(/^\s*\d+\.\s*/gm, "")
+    .replace(/[—–\-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function dedupeDialogueItems(exercises: OutExercise[]): OutExercise[] {
+  const keyToIndex: Record<string, number> = {};
+  const result: OutExercise[] = [];
+  exercises.forEach((ex) => {
+    if (!DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) {
+      result.push(ex);
+      return;
+    }
+    const key = dialogueContentKey(ex.prompt);
+    const existingIdx = keyToIndex[key];
+    if (existingIdx === undefined) {
+      keyToIndex[key] = result.length;
+      result.push(ex);
+    } else if (!result[existingIdx].answer && ex.answer) {
+      // 先に見つけた方に答えが無く、後から来た重複の方に答えがあれば流用する
+      result[existingIdx] = { ...result[existingIdx], answer: ex.answer, explanation_ja: ex.explanation_ja };
+    }
+  });
+  return result;
+}
+
 // AIの抽出結果に、正規表現で見つけた対話穴埋めの構造を補強する。
 // AIの方が既に全部見つけている場合は何もしない（正規表現の検出漏れで
 // 逆に壊さないため、「正規表現の件数 > AIの件数」のときだけ差し替える）。
@@ -296,11 +332,21 @@ ${body.text.slice(0, 20000)}
       choices: ex.choices,
     }));
 
-    // 対話穴埋め問題は、AIの抽出結果が実際の空欄数より少ない場合、正規表現の
+    // 対話穴埋め問題は、専用OCR呼び出しと通常のOCR呼び出しの両方が拾ってしまい
+    // 重複することがあるため、まず重複をまとめる
+    const deduped = dedupeDialogueItems(rawExercises);
+    // その上で、AIの抽出結果が実際の空欄数より少ない場合は、正規表現の
     // 検出結果で補強する（何度プロンプトを調整しても再発した問題への保険）
     const model = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1";
-    const { merged, needsAnswer } = reinforceDialogueBlanks(rawExercises, body.text);
-    const exercises = await fillMissingAnswers(client, model, merged, needsAnswer, body.text);
+    const { merged } = reinforceDialogueBlanks(deduped, body.text);
+    // 補強で新しい項目を差し込んだ後、念のためもう一度重複を除いておく
+    const dedupedMerged = dedupeDialogueItems(merged);
+    // インデックスがずれてしまうため、needsAnswer はこの最終的な配列から数え直す
+    const needsAnswer: number[] = [];
+    dedupedMerged.forEach((ex, idx) => {
+      if (!ex.answer && DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) needsAnswer.push(idx);
+    });
+    const exercises = await fillMissingAnswers(client, model, dedupedMerged, needsAnswer, body.text);
 
     return NextResponse.json({ exercises });
   } catch (e: any) {
