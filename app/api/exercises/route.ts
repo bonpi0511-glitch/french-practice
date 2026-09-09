@@ -59,6 +59,15 @@ export async function POST(req: NextRequest) {
 特に注意が必要な2つの形式:
 1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: この候補リストは選択肢であり、答えを選ぶために絶対に必要な情報なので、省略せず prompt の末尾にそのまま全部含めること（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses. un croissant, une fleur, des bonbons, une baguette, ...」）。正解が複数ある場合、answer にはそのリストの中の正しい項目だけを「、」区切りで全部含める。qtype は "text" にする（choices は使わない。リストは prompt 側に含めているため）。
 2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中に番号付きの空欄（1. — ... / — ___ / 2. — ... のように）が複数ある場合、空欄1つにつき1つの設問として必ず全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の直前のセリフ（1〜2行程度）だけを最小限の文脈として含めれば十分で、それより前のやりとり全体を毎回繰り返して含めないこと（例えば3番目の空欄の prompt に1番目・2番目のやりとりまで丸ごと含めるのは誤り。2番目の空欄までの短いやり取りだけで十分）。
+   【特に注意】最初の空欄（1番）は、大問の指示文（「Complétez le dialogue suivant.」など）のすぐ次に来ることが多く、直前の文脈がその指示文しか無い（＝対話の一番最初のセリフが空欄の直前になる）ことがあるが、この場合でも1番目の空欄を絶対に省略しないこと。以下は具体例:
+     1. — Monsieur ?
+        — ___________
+     2. — Oui, monsieur. Voilà deux croissants. Et avec ceci ?
+        — ___________
+     3. — Nous avons des petites tartes aux pommes, aux framboises, au citron...
+        — ___________
+     4. — Voilà, monsieur, deux petites tartes au citron.
+   この例では4番目はセリフが埋まっており空欄が無いので対象外だが、1・2・3番目の空欄は3問とも必ず抽出する（1番目「— Monsieur ? — ___________」を省略してはいけない）。
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
