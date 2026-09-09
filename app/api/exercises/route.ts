@@ -86,8 +86,20 @@ function extractDialogueBlanks(text: string): DialogueGroup[] {
             break;
           }
         }
+        // 直後のセリフ（次の空欄ではない、確定した行）も分かる場合は含める。
+        // 空欄の答えが、その後の相手の返答（「はい、〜をどうぞ」など）から
+        // しか判断できないことがあるため（例: 最後の空欄の答えは、その次の
+        // 「Voilà, deux petites tartes au citron.」という行を見て初めて分かる）。
+        let after = "";
+        for (let m = k + 1; m < blockLines.length; m++) {
+          const cand = blockLines[m].trim();
+          if (!cand) continue;
+          if (!BLANK_LINE_RE.test(blockLines[m])) after = cand;
+          break;
+        }
         const blankText = blockLines[k].trim();
-        items.push({ prompt: ctx ? `${ctx}\n${blankText}` : blankText });
+        const parts = [ctx, blankText, after].filter(Boolean);
+        items.push({ prompt: parts.join("\n") });
       }
       if (items.length > 0) groups.push({ groupTitle: instructionLine, items });
       i = j;
@@ -123,6 +135,38 @@ function dialogueContentKey(prompt: string): string {
     .toLowerCase();
 }
 
+// 対話穴埋めの大問は、専用OCR呼び出しと通常のOCR呼び出しが両方拾ってしまうと、
+// 本文中に同じ指示文（例:「5 Complétez le dialogue suivant.」）の対話ブロックが
+// まるごと2回以上出現することがある。extractDialogueBlanks はその両方を
+// 別々のグループとして見つけてしまうため、ここで指示文が同じグループを1つに
+// まとめ、空欄も内容ベースで重複排除しておく（そうしないと、後段で
+// 複数グループを順番に差し替えるうちに、前のグループの差し替え結果が
+// 残ってしまうことがある）。
+function mergeDuplicateGroups(groups: DialogueGroup[]): DialogueGroup[] {
+  const clusters: Record<string, DialogueGroup> = {};
+  const order: string[] = [];
+  groups.forEach((g) => {
+    const key = normLine(g.groupTitle);
+    if (!clusters[key]) {
+      clusters[key] = { groupTitle: g.groupTitle, items: [] };
+      order.push(key);
+    }
+    clusters[key].items = clusters[key].items.concat(g.items);
+  });
+  return order.map((key) => {
+    const g = clusters[key];
+    const seen: Record<string, true> = {};
+    const items: { prompt: string }[] = [];
+    g.items.forEach((it) => {
+      const k = dialogueContentKey(it.prompt);
+      if (seen[k]) return;
+      seen[k] = true;
+      items.push(it);
+    });
+    return { groupTitle: g.groupTitle, items };
+  });
+}
+
 function dedupeDialogueItems(exercises: OutExercise[]): OutExercise[] {
   const keyToIndex: Record<string, number> = {};
   const result: OutExercise[] = [];
@@ -152,7 +196,7 @@ function dedupeDialogueItems(exercises: OutExercise[]): OutExercise[] {
 // 使うことで、AIの崩れ方に関わらず安定させる。答え・解説だけは、文脈が一致する
 // AI項目があれば流用する。
 function reinforceDialogueBlanks(exercises: OutExercise[], rawText: string): { merged: OutExercise[] } {
-  const groups = extractDialogueBlanks(rawText);
+  const groups = mergeDuplicateGroups(extractDialogueBlanks(rawText));
   if (groups.length === 0) return { merged: exercises };
 
   let merged = exercises.slice();
@@ -280,7 +324,7 @@ export async function POST(req: NextRequest) {
 
 特に注意が必要な2つの形式:
 1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: これは1問だけの設問として抽出し、qtype を "multi" にする。prompt には大問の指示文（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses.」）だけを入れ、リストの単語は prompt に含めず、代わりに choices にリストの項目を1つずつ全部（省略しない）そのまま入れる。answer には、そのリストの中で実際に正しい項目だけを「、」区切りで全部含める（choices と完全に同じ表記にする）。
-2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中の空欄1つにつき1つの設問として全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の行と、その直前のセリフ1行の、合計2行をそのまま含める（例:「— Oui, monsieur. Voilà deux croissants. Et avec ceci ?\\n— ___________」）。それより前のやりとりは含めない。prompt には元の教材にある対話のセリフをそのまま入れるだけにし、説明・注釈・カッコ書きなど元の教材に無い文字列は一切追加しないこと。
+2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中の空欄1つにつき1つの設問として全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の直前のセリフ1行・空欄そのもの・（あれば）空欄の直後の確定したセリフ1行、を合計2〜3行そのまま含める（例:「— Oui, monsieur. Voilà deux croissants. Et avec ceci ?\\n— ___________\\n— Nous avons des petites tartes aux pommes, aux framboises, au citron...」）。空欄の答えは直前のセリフだけでなく、直後の相手の返答（「はい、〜をどうぞ」のような確認の言葉）から初めて分かることがあるため、直後の行も分かる場合は必ず含めること。それより前後のやりとりまでは含めない。prompt には元の教材にある対話のセリフをそのまま入れるだけにし、説明・注釈・カッコ書きなど元の教材に無い文字列は一切追加しないこと。
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
