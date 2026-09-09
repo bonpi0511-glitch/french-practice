@@ -24,7 +24,8 @@ type ExerciseItem = {
   groupTitle: string;
   answer: string;
   explanation_ja: string;
-  qtype: "choice" | "text";
+  // "choice": 選択肢から1つだけ選ぶ（Vrai/Fauxなど） / "multi": リストの中から複数選ぶ（丸で囲む形式など） / "text": 自由記述
+  qtype: "choice" | "multi" | "text";
   choices: string[];
 };
 
@@ -74,7 +75,7 @@ function normalizeMaterialEntries(parsed: any): MaterialEntry[] {
       groupTitle: ex?.groupTitle || "",
       answer: ex?.answer || "",
       explanation_ja: ex?.explanation_ja || "",
-      qtype: ex?.qtype === "choice" ? "choice" : "text",
+      qtype: ex?.qtype === "choice" ? "choice" : ex?.qtype === "multi" ? "multi" : "text",
       choices: Array.isArray(ex?.choices) ? ex.choices : [],
     })),
   }));
@@ -470,6 +471,21 @@ export default function FrenchPracticePage() {
     setCheckedExercises((prev) => ({ ...prev, [key]: true }));
   }
 
+  // "multi"（リストから複数選ぶ形式）用: ボタンをタップするたびに選択・解除を切り替える。
+  // 選んだ項目は、元の選択肢の並び順のまま「、」区切りで保存する（採点時の比較を安定させるため）。
+  function toggleExerciseMultiChoice(key: string, choice: string, allChoices: string[]) {
+    const current = new Set(
+      (exerciseAnswers[key] || "")
+        .split("、")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+    if (current.has(choice)) current.delete(choice);
+    else current.add(choice);
+    const ordered = allChoices.filter((c) => current.has(c));
+    setExerciseAnswer(key, ordered.join("、"));
+  }
+
   function normalizeAnswerText(s: string) {
     return s
       .trim()
@@ -478,7 +494,21 @@ export default function FrenchPracticePage() {
       .replace(/\s+/g, " ");
   }
 
-  function isExerciseAnswerCorrect(key: string, correctAnswer: string) {
+  function isExerciseAnswerCorrect(key: string, correctAnswer: string, qtype?: ExerciseItem["qtype"]) {
+    if (qtype === "multi") {
+      // 複数選択は順番を問わず、選んだ項目の集合が一致するかで判定する
+      const toSet = (s: string) =>
+        new Set(
+          s
+            .split(/[、,]/)
+            .map((x) => normalizeAnswerText(x))
+            .filter(Boolean)
+        );
+      const selected = toSet(exerciseAnswers[key] || "");
+      const correct = toSet(correctAnswer);
+      if (selected.size !== correct.size) return false;
+      return Array.from(selected).every((v) => correct.has(v));
+    }
     return normalizeAnswerText(exerciseAnswers[key] || "") === normalizeAnswerText(correctAnswer);
   }
 
@@ -1379,7 +1409,10 @@ export default function FrenchPracticePage() {
                   {group.items.map(({ key, item, itemText }) => {
                     const checked = !!checkedExercises[key];
                     const revealed = revealedExercises.has(key);
-                    const correct = checked ? isExerciseAnswerCorrect(key, item.answer) : false;
+                    const correct = checked ? isExerciseAnswerCorrect(key, item.answer, item.qtype) : false;
+                    const selectedMulti = new Set(
+                      (exerciseAnswers[key] || "").split("、").map((s) => s.trim()).filter(Boolean)
+                    );
                     return (
                       <div key={key} className="p-3">
                         <p className="text-sm font-semibold text-stone-800">{itemText}</p>
@@ -1399,6 +1432,25 @@ export default function FrenchPracticePage() {
                                   {choice}
                                 </button>
                               ))}
+                            </div>
+                          ) : item.qtype === "multi" && item.choices.length > 0 ? (
+                            <div>
+                              <p className="mb-1.5 text-xs text-stone-400">👆 当てはまるものを全部タップしてね（複数選択できます）</p>
+                              <div className="flex flex-wrap gap-2">
+                              {item.choices.map((choice) => (
+                                <button
+                                  key={choice}
+                                  type="button"
+                                  onClick={() => toggleExerciseMultiChoice(key, choice, item.choices)}
+                                  className={`choice-btn ${
+                                    selectedMulti.has(choice) ? "choice-btn-selected" : ""
+                                  }`}
+                                >
+                                  {selectedMulti.has(choice) ? "✓ " : ""}
+                                  {choice}
+                                </button>
+                              ))}
+                              </div>
                             </div>
                           ) : (
                             <input

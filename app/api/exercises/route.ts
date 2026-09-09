@@ -21,8 +21,8 @@ const ExerciseItem = z.object({
   group_title: stringish,
   answer: stringish,
   explanation_ja: stringish,
-  qtype: z.enum(["choice", "text"]).default("text"),
-  choices: z.array(z.string()).max(6).default([]),
+  qtype: z.enum(["choice", "multi", "text"]).default("text"),
+  choices: z.array(z.string()).max(20).default([]),
 });
 
 const Extraction = z.object({
@@ -57,17 +57,8 @@ export async function POST(req: NextRequest) {
 教材には、1つの大問（例:「2 Complétez par « un », « une », « des ».」）の下に複数の小問（1. ___ baguette / 2. ___ glace / ...）がぶら下がっている構成がよくあります。この場合、小問1つ1つを別々の設問として抽出しつつ、それぞれの prompt の先頭に、その小問が属する大問の指示文（何を答えればよいかの説明）を必ず含めてください。小問の番号や文だけを見ても何をすればよいか分からない状態にしないでください。
 
 特に注意が必要な2つの形式:
-1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: この候補リストは選択肢であり、答えを選ぶために絶対に必要な情報なので、省略せず prompt の末尾にそのまま全部含めること（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses. un croissant, une fleur, des bonbons, une baguette, ...」）。正解が複数ある場合、answer にはそのリストの中の正しい項目だけを「、」区切りで全部含める。qtype は "text" にする（choices は使わない。リストは prompt 側に含めているため）。
-2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中に番号付きの空欄（1. — ... / — ___ / 2. — ... のように）が複数ある場合、空欄1つにつき1つの設問として必ず全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の直前のセリフ（1〜2行程度）だけを最小限の文脈として含めれば十分で、それより前のやりとり全体を毎回繰り返して含めないこと（例えば3番目の空欄の prompt に1番目・2番目のやりとりまで丸ごと含めるのは誤り。2番目の空欄までの短いやり取りだけで十分）。
-   【特に注意】最初の空欄（1番）は、大問の指示文（「Complétez le dialogue suivant.」など）のすぐ次に来ることが多く、直前の文脈がその指示文しか無い（＝対話の一番最初のセリフが空欄の直前になる）ことがあるが、この場合でも1番目の空欄を絶対に省略しないこと。以下は具体例:
-     1. — Monsieur ?
-        — ___________
-     2. — Oui, monsieur. Voilà deux croissants. Et avec ceci ?
-        — ___________
-     3. — Nous avons des petites tartes aux pommes, aux framboises, au citron...
-        — ___________
-     4. — Voilà, monsieur, deux petites tartes au citron.
-   この例では4番目はセリフが埋まっており空欄が無いので対象外だが、1・2・3番目の空欄は3問とも必ず抽出する（1番目「— Monsieur ? — ___________」を省略してはいけない）。
+1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: これは1問だけの設問として抽出し、qtype を "multi" にする。prompt には大問の指示文（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses.」）だけを入れ、リストの単語は prompt に含めず、代わりに choices にリストの項目を1つずつ全部（省略しない）そのまま入れる。answer には、そのリストの中で実際に正しい項目だけを「、」区切りで全部含める（choices と完全に同じ表記にする）。
+2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中に番号付きの空欄（1. — ... / — ___ / 2. — ... のように）が複数ある場合、空欄1つにつき1つの設問として必ず全て抽出する（1つも欠落させない。最初の空欄が大問の指示文のすぐ次に来る場合も同様に省略しない）。各設問の prompt には、その空欄の直前のセリフ1行だけを最小限の文脈として含めれば十分で、それより前のやりとり全体を繰り返して含めないこと。prompt には元の教材にある対話のセリフをそのまま入れるだけにし、「（直前のセリフ：...）」のような、元の教材に無い説明・注釈・カッコ書きを絶対に追加しないこと。
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
@@ -75,9 +66,10 @@ export async function POST(req: NextRequest) {
 - answer: 正解（教材の会話文や文法解説の内容から判断できる場合はそれを使う。フランス語の単語・文・Vrai/Fauxなど、簡潔に。choice タイプの場合は choices のいずれかと完全に一致させる。正解が複数ある設問（複数選択など）の場合も、配列ではなく「、」で区切った1つの文字列にすること）
 - explanation_ja: なぜその答えになるか、日本語で短く（1〜2文）説明
 - qtype: 回答形式。以下のいずれか:
-  - "choice": 正誤問題（Vrai/Faux）や、選択肢が明示されている選択問題。この場合 choices に選べる選択肢をすべて入れる（Vrai/Fauxなら choices は ["Vrai","Faux"]）
+  - "choice": 正誤問題（Vrai/Faux）や、選択肢が明示されている、正解が1つだけの選択問題。この場合 choices に選べる選択肢をすべて入れる（Vrai/Fauxなら choices は ["Vrai","Faux"]）
+  - "multi": 「Entourez les bonnes réponses.」のように、リストの中から正解が複数（1つとは限らない）ある形式。choices にリストの項目を全部入れる
   - "text": 穴埋め問題や自由記述問題など、選択肢が無く自分で単語・文を書いて答える形式。この場合 choices は空配列にする
-- choices: qtype が "choice" のときの選択肢一覧（フランス語のまま）。"text" のときは空配列
+- choices: qtype が "choice" または "multi" のときの選択肢一覧（フランス語のまま、省略しない）。"text" のときは空配列
 
 教材テキスト中の小問の番号（1, 2, 3...）は、そのテキストに書かれている番号をそのまま使い、抽出する順序も元のテキストに現れる番号順（1→2→3...）にすること。番号を勝手に振り直したり、他の小問と入れ替えたりしない。
 
