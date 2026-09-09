@@ -59,7 +59,13 @@ const NEW_BIG_QUESTION_RE =
   /^\s*\d+\s*[.\)]?\s*(entourez|cochez|répondez|reliez|complétez|associez|choisissez|vrai|faux)/i;
 const BLANK_LINE_RE = /^\s*\d*\.?\s*[—–\-]?\s*_{2,}\s*$/;
 
-type DialogueGroup = { groupTitle: string; items: { prompt: string }[] };
+// ctx（直前のセリフ）が「この空欄が何番目のどの空欄か」を決める安定した
+// 識別子で、after（直後のセリフ）はあくまで表示用の補助情報（見つからない
+// こともある）。この2つを分けて持たせておくことで、同じ空欄が「afterあり」
+// 「afterなし」など表示のリッチさが違う形で複数回抽出されても、ctxベースで
+// 同一の空欄だと判定できるようにする。
+type DialogueBlank = { ctx: string; blank: string; after: string };
+type DialogueGroup = { groupTitle: string; items: DialogueBlank[] };
 
 function extractDialogueBlanks(text: string): DialogueGroup[] {
   const lines = text.split(/\r?\n/);
@@ -75,7 +81,7 @@ function extractDialogueBlanks(text: string): DialogueGroup[] {
         blockLines.push(lines[j]);
         j++;
       }
-      const items: { prompt: string }[] = [];
+      const items: DialogueBlank[] = [];
       for (let k = 0; k < blockLines.length; k++) {
         if (!BLANK_LINE_RE.test(blockLines[k])) continue;
         let ctx = "";
@@ -97,9 +103,7 @@ function extractDialogueBlanks(text: string): DialogueGroup[] {
           if (!BLANK_LINE_RE.test(blockLines[m])) after = cand;
           break;
         }
-        const blankText = blockLines[k].trim();
-        const parts = [ctx, blankText, after].filter(Boolean);
-        items.push({ prompt: parts.join("\n") });
+        items.push({ ctx, blank: blockLines[k].trim(), after });
       }
       if (items.length > 0) groups.push({ groupTitle: instructionLine, items });
       i = j;
@@ -125,13 +129,16 @@ function normLine(s: string) {
 
 // 対話穴埋めの空欄は、専用のOCR呼び出しと通常のOCR呼び出しの両方が
 // （除外の指示にもかかわらず）拾ってしまうことがあり、その場合、同じ空欄が
-// 表記違い（番号の有無・空欄をセリフと同じ行に書くか別行にするか等）で
-// 重複して抽出されることがある。空欄マーカーや番号・記号を取り除いた
-// 「セリフ本文」だけを比較キーにすることで、表記が違っても同じ空欄だと判定する。
-function dialogueContentKey(prompt: string): string {
-  return prompt
+// 表記違い（番号の有無・afterが取れているかどうか等）で重複して抽出される
+// ことがある。「直前のセリフ（ctx）」は、その空欄が対話の中で何番目の
+// どの空欄かを一意に決める安定した情報なので、これだけを比較キーにする
+// （afterの有無で長さが変わる prompt 全体をキーにすると、afterが取れた版と
+// 取れなかった版が別物として扱われ、重複排除に失敗するため）。
+function dialogueBlankKey(item: DialogueBlank): string {
+  const base = item.ctx || item.blank;
+  return base
     .replace(/[—–\-]?\s*_{2,}/g, "")
-    .replace(/^\s*\d+\.?\s*/gm, "")
+    .replace(/^\s*\d+\.?\s*/, "")
     .replace(/[—–\-]/g, "")
     .replace(/\s+/g, " ")
     .trim()
@@ -142,9 +149,8 @@ function dialogueContentKey(prompt: string): string {
 // 本文中に同じ指示文（例:「5 Complétez le dialogue suivant.」）の対話ブロックが
 // まるごと2回以上出現することがある。extractDialogueBlanks はその両方を
 // 別々のグループとして見つけてしまうため、ここで指示文が同じグループを1つに
-// まとめ、空欄も内容ベースで重複排除しておく（そうしないと、後段で
-// 複数グループを順番に差し替えるうちに、前のグループの差し替え結果が
-// 残ってしまうことがある）。
+// まとめ、空欄も内容ベースで重複排除しておく。同じ空欄が複数回見つかった
+// 場合は、afterまで取れている「より情報が多い方」を優先して残す。
 function mergeDuplicateGroups(groups: DialogueGroup[]): DialogueGroup[] {
   const clusters: Record<string, DialogueGroup> = {};
   const order: string[] = [];
@@ -158,84 +164,47 @@ function mergeDuplicateGroups(groups: DialogueGroup[]): DialogueGroup[] {
   });
   return order.map((key) => {
     const g = clusters[key];
-    const seen: Record<string, true> = {};
-    const items: { prompt: string }[] = [];
+    const keyToIndex: Record<string, number> = {};
+    const items: DialogueBlank[] = [];
     g.items.forEach((it) => {
-      const k = dialogueContentKey(it.prompt);
-      if (seen[k]) return;
-      seen[k] = true;
-      items.push(it);
+      const k = dialogueBlankKey(it);
+      const existingIdx = keyToIndex[k];
+      if (existingIdx === undefined) {
+        keyToIndex[k] = items.length;
+        items.push(it);
+      } else if (!items[existingIdx].after && it.after) {
+        // 既存の方に after が無く、今回の方にはあれば、より情報の多い方に差し替える
+        items[existingIdx] = it;
+      }
     });
     return { groupTitle: g.groupTitle, items };
   });
 }
 
-function dedupeDialogueItems(exercises: OutExercise[]): OutExercise[] {
-  const keyToIndex: Record<string, number> = {};
-  const result: OutExercise[] = [];
-  exercises.forEach((ex) => {
-    if (!DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) {
-      result.push(ex);
-      return;
-    }
-    const key = dialogueContentKey(ex.prompt);
-    const existingIdx = keyToIndex[key];
-    if (existingIdx === undefined) {
-      keyToIndex[key] = result.length;
-      result.push(ex);
-    } else if (!result[existingIdx].answer && ex.answer) {
-      // 先に見つけた方に答えが無く、後から来た重複の方に答えがあれば流用する
-      result[existingIdx] = { ...result[existingIdx], answer: ex.answer, explanation_ja: ex.explanation_ja };
-    }
-  });
-  return result;
-}
-
-// 対話穴埋め（Complétez le dialogue のような形式）は、AIの抽出結果を信用せず、
-// 常に正規表現で検出した構造を正としてAI項目を丸ごと差し替える。
+// 対話穴埋め（Complétez le dialogue のような形式）は、AIによる抽出を一切使わない。
 // AI側は「一部だけ拾う」「同じ空欄を表記違いで重複させる」「セリフをまたいで
-// 空欄をまとめてしまう」といった崩れ方を何度も繰り返したため、件数比較で
-// 条件付きに差し替えるのではなく、この形式である以上は常に正規表現の結果を
-// 使うことで、AIの崩れ方に関わらず安定させる。答え・解説だけは、文脈が一致する
-// AI項目があれば流用する。
-function reinforceDialogueBlanks(exercises: OutExercise[], rawText: string): { merged: OutExercise[] } {
+// 空欄をまとめてしまう」といった崩れ方を、プロンプトをどれだけ調整しても
+// 繰り返した。AI結果とのすり合わせ（答えの流用など）をしようとするたびに
+// 新しい不具合が生まれたため、この形式に関しては「本文をそのまま正規表現で
+// 機械的に設問へ変換する」方針に統一する（AIの判断を挟まない）。
+// 正解・解説は、この後 fillMissingAnswers で別途AIに埋めてもらう。
+function buildDialogueExercises(rawText: string): OutExercise[] {
   const groups = mergeDuplicateGroups(extractDialogueBlanks(rawText));
-  if (groups.length === 0) return { merged: exercises };
-
-  let merged = exercises.slice();
-
+  const items: OutExercise[] = [];
   groups.forEach((group) => {
-    const aiIdxs: number[] = [];
-    merged.forEach((ex, idx) => {
-      if (DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) aiIdxs.push(idx);
-    });
-
-    // 答え・解説を流用できるように、AI項目を「文脈の1行目」で引けるようにしておく
-    const answerByContext: Record<string, { answer: string; explanation_ja: string }> = {};
-    aiIdxs.forEach((idx) => {
-      const firstLine = normLine((merged[idx].prompt || "").split("\n")[0] || "");
-      if (firstLine) answerByContext[firstLine] = { answer: merged[idx].answer, explanation_ja: merged[idx].explanation_ja };
-    });
-
-    const newItems: OutExercise[] = group.items.map((gi) => {
-      const firstLine = normLine(gi.prompt.split("\n")[0] || "");
-      const borrowed = answerByContext[firstLine];
-      return {
-        prompt: gi.prompt,
+    group.items.forEach((gi) => {
+      const prompt = [gi.ctx, gi.blank, gi.after].filter(Boolean).join("\n");
+      items.push({
+        prompt,
         groupTitle: group.groupTitle,
-        answer: borrowed?.answer || "",
-        explanation_ja: borrowed?.explanation_ja || "",
+        answer: "",
+        explanation_ja: "",
         qtype: "text",
         choices: [],
-      };
+      });
     });
-
-    const withoutOld = merged.filter((_, idx) => aiIdxs.indexOf(idx) === -1);
-    const insertAt = aiIdxs.length > 0 ? aiIdxs[0] - aiIdxs.filter((idx) => idx < aiIdxs[0]).length : withoutOld.length;
-    merged = withoutOld.slice(0, insertAt).concat(newItems, withoutOld.slice(insertAt));
   });
-
-  return { merged };
+  return items;
 }
 
 // 正規表現で補った空欄のうち、AIの結果から答えを流用できなかったものだけ、
@@ -325,9 +294,10 @@ export async function POST(req: NextRequest) {
 
 教材には、1つの大問（例:「2 Complétez par « un », « une », « des ».」）の下に複数の小問（1. ___ baguette / 2. ___ glace / ...）がぶら下がっている構成がよくあります。この場合、小問1つ1つを別々の設問として抽出しつつ、それぞれの prompt の先頭に、その小問が属する大問の指示文（何を答えればよいかの説明）を必ず含めてください。小問の番号や文だけを見ても何をすればよいか分からない状態にしないでください。
 
-特に注意が必要な2つの形式:
-1. 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: これは1問だけの設問として抽出し、qtype を "multi" にする。prompt には大問の指示文（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses.」）だけを入れ、リストの単語は prompt に含めず、代わりに choices にリストの項目を1つずつ全部（省略しない）そのまま入れる。answer には、そのリストの中で実際に正しい項目だけを「、」区切りで全部含める（choices と完全に同じ表記にする）。
-2. 「対話文の穴埋め（Complétez le dialogue suivant. など）」形式: 対話の中の空欄1つにつき1つの設問として全て抽出する（1つも欠落させない）。各設問の prompt には、その空欄の直前のセリフ1行・空欄そのもの・（あれば）空欄の直後の確定したセリフ1行、を合計2〜3行そのまま含める（例:「— Oui, monsieur. Voilà deux croissants. Et avec ceci ?\\n— ___________\\n— Nous avons des petites tartes aux pommes, aux framboises, au citron...」）。空欄の答えは直前のセリフだけでなく、直後の相手の返答（「はい、〜をどうぞ」のような確認の言葉）から初めて分かることがあるため、直後の行も分かる場合は必ず含めること。それより前後のやりとりまでは含めない。prompt には元の教材にある対話のセリフをそのまま入れるだけにし、説明・注釈・カッコ書きなど元の教材に無い文字列は一切追加しないこと。
+特に注意が必要な形式:
+- 「リストの中から選ぶ・丸で囲む」形式（例:「Entourez les bonnes réponses.」の下に "un croissant, une fleur, des bonbons, ..." のような単語・フレーズのリストが並んでいる）: これは1問だけの設問として抽出し、qtype を "multi" にする。prompt には大問の指示文（例:「Que pouvez-vous acheter dans une boulangerie-pâtisserie ? Entourez les bonnes réponses.」）だけを入れ、リストの単語は prompt に含めず、代わりに choices にリストの項目を1つずつ全部（省略しない）そのまま入れる。answer には、そのリストの中で実際に正しい項目だけを「、」区切りで全部含める（choices と完全に同じ表記にする）。
+
+【重要】「Complétez le dialogue suivant.」のような、対話文の中のセリフ（返答）を埋める形式の設問は、analysis にも exercises にも一切含めないこと（このタスクの対象外。この形式だけは別の仕組みで機械的に処理するため、AIによる抽出は行わない）。
 
 その設問部分を見つけ、1問ずつ以下の形式に整理してください:
 - prompt: 設問文（例:「Complétez par « un », « une » ou « des ». 1. ___ baguette」のように、その小問が属する大問の指示文＋元の番号・空欄（___）をセットで含める。「Vrai ou faux ? 1. La cliente achète du pain.」のように大問の指示（Vrai ou faux ?）も同様に含める。ただし選択肢そのものはここに含めず choices に分ける）
@@ -375,21 +345,18 @@ ${body.text.slice(0, 20000)}
       choices: ex.choices,
     }));
 
-    // 対話穴埋め問題は、専用OCR呼び出しと通常のOCR呼び出しの両方が拾ってしまい
-    // 重複することがあるため、まず重複をまとめる
-    const deduped = dedupeDialogueItems(rawExercises);
-    // その上で、AIの抽出結果が実際の空欄数より少ない場合は、正規表現の
-    // 検出結果で補強する（何度プロンプトを調整しても再発した問題への保険）
+    // 対話穴埋め問題は、AIには一切抽出させず（指示はしているが、それでも
+    // 稀に紛れ込むことがあるため念のため除去）、常に正規表現による機械的な
+    // 抽出結果だけを使う。それ以外の設問はこれまで通りAIの抽出結果を使う。
     const model = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1";
-    const { merged } = reinforceDialogueBlanks(deduped, body.text);
-    // 補強で新しい項目を差し込んだ後、念のためもう一度重複を除いておく
-    const dedupedMerged = dedupeDialogueItems(merged);
-    // インデックスがずれてしまうため、needsAnswer はこの最終的な配列から数え直す
+    const nonDialogueExercises = rawExercises.filter((ex) => !DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || ""));
+    const dialogueExercises = buildDialogueExercises(body.text);
+    const combined = nonDialogueExercises.concat(dialogueExercises);
     const needsAnswer: number[] = [];
-    dedupedMerged.forEach((ex, idx) => {
+    combined.forEach((ex, idx) => {
       if (!ex.answer && DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) needsAnswer.push(idx);
     });
-    const exercises = await fillMissingAnswers(client, model, dedupedMerged, needsAnswer, body.text);
+    const exercises = await fillMissingAnswers(client, model, combined, needsAnswer, body.text);
 
     return NextResponse.json({ exercises });
   } catch (e: any) {
