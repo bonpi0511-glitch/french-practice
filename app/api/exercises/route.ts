@@ -144,15 +144,16 @@ function dedupeDialogueItems(exercises: OutExercise[]): OutExercise[] {
   return result;
 }
 
-// AIの抽出結果に、正規表現で見つけた対話穴埋めの構造を補強する。
-// AIの方が既に全部見つけている場合は何もしない（正規表現の検出漏れで
-// 逆に壊さないため、「正規表現の件数 > AIの件数」のときだけ差し替える）。
-function reinforceDialogueBlanks(
-  exercises: OutExercise[],
-  rawText: string
-): { merged: OutExercise[]; needsAnswer: number[] } {
+// 対話穴埋め（Complétez le dialogue のような形式）は、AIの抽出結果を信用せず、
+// 常に正規表現で検出した構造を正としてAI項目を丸ごと差し替える。
+// AI側は「一部だけ拾う」「同じ空欄を表記違いで重複させる」「セリフをまたいで
+// 空欄をまとめてしまう」といった崩れ方を何度も繰り返したため、件数比較で
+// 条件付きに差し替えるのではなく、この形式である以上は常に正規表現の結果を
+// 使うことで、AIの崩れ方に関わらず安定させる。答え・解説だけは、文脈が一致する
+// AI項目があれば流用する。
+function reinforceDialogueBlanks(exercises: OutExercise[], rawText: string): { merged: OutExercise[] } {
   const groups = extractDialogueBlanks(rawText);
-  if (groups.length === 0) return { merged: exercises, needsAnswer: [] };
+  if (groups.length === 0) return { merged: exercises };
 
   let merged = exercises.slice();
 
@@ -161,7 +162,6 @@ function reinforceDialogueBlanks(
     merged.forEach((ex, idx) => {
       if (DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) aiIdxs.push(idx);
     });
-    if (group.items.length <= aiIdxs.length) return;
 
     // 答え・解説を流用できるように、AI項目を「文脈の1行目」で引けるようにしておく
     const answerByContext: Record<string, { answer: string; explanation_ja: string }> = {};
@@ -188,11 +188,7 @@ function reinforceDialogueBlanks(
     merged = withoutOld.slice(0, insertAt).concat(newItems, withoutOld.slice(insertAt));
   });
 
-  const needsAnswer: number[] = [];
-  merged.forEach((ex, idx) => {
-    if (!ex.answer && DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "")) needsAnswer.push(idx);
-  });
-  return { merged, needsAnswer };
+  return { merged };
 }
 
 // 正規表現で補った空欄のうち、AIの結果から答えを流用できなかったものだけ、
