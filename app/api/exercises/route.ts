@@ -59,6 +59,17 @@ const NEW_BIG_QUESTION_RE =
   /^\s*\d+\s*[.\)]?\s*(entourez|cochez|répondez|reliez|complétez|associez|choisissez|vrai|faux)/i;
 const BLANK_LINE_RE = /^\s*\d*\.?\s*[—–\-]?\s*_{2,}\s*$/;
 
+// AIに「対話穴埋めはexercisesに一切含めないで」と指示しても、まれに
+// group_title を本来の指示文と違う文字列にして紛れ込ませてくることがあり、
+// その場合 DIALOGUE_INSTRUCTION_RE では検出できず、正規表現の結果と
+// 二重に表示されてしまう。prompt 自体が「セリフの引用符（—）」と
+// 「空欄（___）」を両方含んでいれば、group_title が何であれ対話の
+// 穴埋めだと判断し、除外する（この形式は buildDialogueExercises 側で
+// 別途カバーしているため、二重に含める必要が無い）。
+function looksLikeDialogueTurn(prompt: string): boolean {
+  return /[—–]/.test(prompt) && /_{2,}/.test(prompt);
+}
+
 // ctx（直前のセリフ）が「この空欄が何番目のどの空欄か」を決める安定した
 // 識別子で、after（直後のセリフ）はあくまで表示用の補助情報（見つからない
 // こともある）。この2つを分けて持たせておくことで、同じ空欄が「afterあり」
@@ -207,9 +218,11 @@ function buildDialogueExercises(rawText: string): OutExercise[] {
   return items;
 }
 
-// 正規表現で補った空欄のうち、AIの結果から答えを流用できなかったものだけ、
-// 追加でAIに答えだけを埋めてもらう（対象が絞られた小さな依頼なので、
-// 通常の抽出より確実にこなせる）。
+// 正規表現で機械的に作った対話穴埋め設問には正解が入っていないため、
+// 追加でAIに答えだけを埋めてもらう（対象が絞られた小さな依頼）。
+// 数値インデックスでのマッチングは、AIが型（文字列/数値）や順序を
+// 間違えるとまるごと失敗して答えが1つも埋まらなくなることがあったため、
+// 文字列ID（"q0","q1"...）で照合し、型のブレも吸収するようにしてある。
 async function fillMissingAnswers(
   client: OpenAI,
   model: string,
@@ -219,11 +232,18 @@ async function fillMissingAnswers(
 ): Promise<OutExercise[]> {
   if (needsAnswer.length === 0) return merged;
 
-  const FillItem = z.object({ index: z.number(), answer: stringish, explanation_ja: stringish });
+  const FillItem = z
+    .object({
+      id: z.union([z.string(), z.number()]).transform((v) => String(v)),
+      answer: stringish,
+      explanation_ja: stringish,
+    })
+    .catch({ id: "", answer: "", explanation_ja: "" });
   const FillResult = z.object({ answers: z.array(FillItem).default([]) });
 
+  const ids = needsAnswer.map((_, i) => `q${i}`);
   const list = needsAnswer
-    .map((idx, i) => `${i}: ${merged[idx].prompt.replace(/\n/g, " / ")}`)
+    .map((idx, i) => `${ids[i]}: ${merged[idx].prompt.replace(/\n/g, " / ")}`)
     .join("\n");
 
   try {
@@ -235,9 +255,9 @@ async function fillMissingAnswers(
           content: [
             {
               type: "input_text",
-              text: `以下は、フランス語教材の対話文の穴埋め問題の一部です。教材本文を参考に、それぞれの空欄に入る自然なフランス語の返答（正解）と、日本語での短い解説を考えてください。
+              text: `以下は、フランス語教材の対話文の穴埋め問題です（全部で${needsAnswer.length}問）。教材本文を参考に、それぞれの空欄に入る自然なフランス語の返答（正解）と、日本語での短い解説を考えてください。
 
-設問一覧（"index: 文脈 / — ___"の形式）:
+設問一覧（各行「ID: 文脈 / — ___」の形式。IDは変更せずそのまま使うこと）:
 ${list}
 
 教材本文:
@@ -245,27 +265,34 @@ ${list}
 ${sourceText.slice(0, 20000)}
 """
 
-JSONのみで返してください: {"answers":[{"index":0,"answer":"","explanation_ja":""}]}`,
+必ず${needsAnswer.length}問すべてに回答し、answers 配列の要素数を${needsAnswer.length}個ちょうどにすること。id は上記のIDをそのまま文字列でコピーすること（例: "q0"）。
+JSONのみで返してください: {"answers":[{"id":"q0","answer":"","explanation_ja":""}]}`,
             },
           ],
         },
       ],
       text: { format: { type: "json_object" } },
-      max_output_tokens: 2000,
+      max_output_tokens: 3000,
       temperature: 0.3,
     });
     const text = getTextFromResponse(response);
     const parsed = FillResult.parse(JSON.parse(text));
+    const idToTarget: Record<string, number> = {};
+    ids.forEach((id, i) => {
+      idToTarget[id] = needsAnswer[i];
+    });
     const result = merged.slice();
     parsed.answers.forEach((a) => {
-      const targetIdx = needsAnswer[a.index];
-      if (targetIdx !== undefined && result[targetIdx]) {
+      const targetIdx = idToTarget[a.id];
+      if (targetIdx !== undefined && (a.answer || a.explanation_ja)) {
         result[targetIdx] = { ...result[targetIdx], answer: a.answer, explanation_ja: a.explanation_ja };
       }
     });
     return result;
-  } catch {
-    // 失敗しても致命的ではない（設問自体は表示される。答えが空欄のままになるだけ）
+  } catch (e) {
+    // 失敗しても致命的ではない（設問自体は表示される。答えが空欄のままになるだけ）が、
+    // 原因を追えるようログには残しておく
+    console.error("fillMissingAnswers error:", e);
     return merged;
   }
 }
@@ -349,7 +376,9 @@ ${body.text.slice(0, 20000)}
     // 稀に紛れ込むことがあるため念のため除去）、常に正規表現による機械的な
     // 抽出結果だけを使う。それ以外の設問はこれまで通りAIの抽出結果を使う。
     const model = process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_VISION_MODEL || "gpt-4.1";
-    const nonDialogueExercises = rawExercises.filter((ex) => !DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || ""));
+    const nonDialogueExercises = rawExercises.filter(
+      (ex) => !DIALOGUE_INSTRUCTION_RE.test(ex.groupTitle || "") && !looksLikeDialogueTurn(ex.prompt)
+    );
     const dialogueExercises = buildDialogueExercises(body.text);
     const combined = nonDialogueExercises.concat(dialogueExercises);
     const needsAnswer: number[] = [];
